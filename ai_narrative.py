@@ -63,6 +63,54 @@ def _rule_based_narrative(result: ScanResult) -> str:
     return f"{summary}\n\n{action_text}"
 
 
+SYSTEM_PROMPT_OUTREACH = """You are a security consultant who just ran a free, passive
+security scan on a business's public website (headers, TLS, DNS records -- nothing
+invasive) and wants to send them a short, warm cold-outreach message about it.
+
+Write ONE short paragraph (50-80 words) they can copy-paste into an email or LinkedIn
+message. Reference the single most important finding in plain English (no jargon, no
+severity labels). Mention it was found during a quick free security check. End with a
+low-pressure offer to share the full breakdown -- not a hard sell. No subject line, no
+greeting placeholder, no markdown, no signature. Just the message body as one paragraph."""
+
+
+def _rule_based_outreach(target: str, top_title: str, top_detail: str, has_findings: bool) -> str:
+    if not has_findings:
+        return (f"Hey -- I ran a quick free security check on {target} out of curiosity and "
+                 f"it came back clean, which is rare. Nice work on that. Happy to send over the "
+                 f"full report if you'd like it for your records.")
+    return (f"Hey -- I ran a quick free security check on {target} and noticed {top_title.lower()}. "
+            f"Nothing that needs panic, but worth a look. Happy to send over the full breakdown "
+            f"and a quick fix plan if that'd be useful.")
+
+
+def generate_outreach_message(target: str, top_title: str, top_detail: str, has_findings: bool) -> tuple[str, str]:
+    """Returns (message_text, source) where source is 'ai' or 'rule-based'."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return _rule_based_outreach(target, top_title, top_detail, has_findings), "rule-based"
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        user_content = (
+            f"Site: {target}\n"
+            + (f"Top finding: {top_title} -- {top_detail}" if has_findings else "No issues found.")
+        )
+        message = client.messages.create(
+            model=MODEL,
+            max_tokens=200,
+            system=SYSTEM_PROMPT_OUTREACH,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = "".join(block.text for block in message.content if hasattr(block, "text")).strip()
+        if text:
+            return text, "ai"
+        return _rule_based_outreach(target, top_title, top_detail, has_findings), "rule-based"
+    except Exception:
+        return _rule_based_outreach(target, top_title, top_detail, has_findings), "rule-based"
+
+
 def generate_narrative(result: ScanResult) -> tuple[str, str]:
     """Returns (narrative_text, source) where source is 'ai' or 'rule-based'."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")

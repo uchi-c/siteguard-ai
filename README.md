@@ -11,6 +11,12 @@ SPF/DMARC email-spoofing protection, mixed content, outdated JS libraries).
 The AI layer (Claude) turns raw findings into a report a non-technical
 business owner will actually read.
 
+The report page also doubles as an **outbound prospecting tool**: a "Draft
+an outreach message" button turns the scan's top finding into a short,
+copy-pasteable cold-outreach opener ("I ran a free security scan on
+yourbusiness.com and noticed...") — useful when you're the one scanning a
+prospect's site rather than waiting for them to find yours.
+
 ## Run it locally
 
 ```bash

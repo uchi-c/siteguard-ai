@@ -79,6 +79,80 @@
     </form>
   </div>
 
+  <div style="height:20px;"></div>
+
+  <div class="card">
+    <h3 style="margin-top:0;">Reaching out to this site's owner?</h3>
+    <p class="muted" style="font-size:14px;">If this isn't your site, draft a quick opener referencing what we found.</p>
+    <button type="button" id="outreach-btn"
+      data-target="{{ result.target }}"
+      data-top-title="{{ top_finding.title if top_finding else '' }}"
+      data-top-detail="{{ top_finding.detail if top_finding else '' }}"
+      data-has-findings="{{ '1' if result.findings else '0' }}">
+      Draft an outreach message
+    </button>
+    <div id="outreach-result" style="display:none;">
+      <textarea id="outreach-text" readonly rows="5"
+        style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:14px; resize:vertical; margin-top:16px;"></textarea>
+      <div style="height:10px;"></div>
+      <button type="button" id="outreach-copy" class="btn" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border);">Copy to clipboard</button>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('outreach-btn').addEventListener('click', async function () {
+      var btn = this;
+      if (btn.disabled) return;
+      var original = btn.textContent;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Drafting…';
+      try {
+        var body = new URLSearchParams({
+          csrf_token: '{{ csrf_token() }}',
+          target: btn.dataset.target,
+          top_title: btn.dataset.topTitle,
+          top_detail: btn.dataset.topDetail,
+          has_findings: btn.dataset.hasFindings
+        });
+        var resp = await fetch('{{ url_for("outreach") }}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: body.toString()
+        });
+        var data = await resp.json();
+        if (resp.ok && data.message) {
+          document.getElementById('outreach-text').value = data.message;
+          document.getElementById('outreach-result').style.display = 'block';
+          btn.style.display = 'none';
+        } else {
+          btn.disabled = false;
+          btn.textContent = original;
+          alert('Could not draft a message right now -- try again in a moment.');
+        }
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = original;
+        alert('Could not draft a message right now -- try again in a moment.');
+      }
+    });
+
+    document.getElementById('outreach-copy').addEventListener('click', function () {
+      var ta = document.getElementById('outreach-text');
+      var btn = document.getElementById('outreach-copy');
+      var original = btn.textContent;
+      ta.select();
+      navigator.clipboard.writeText(ta.value).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = original; }, 1500);
+      }).catch(function () {
+        // Clipboard API blocked (permissions, older browser) -- text is
+        // already selected above, so Ctrl/Cmd+C still works manually.
+        btn.textContent = 'Selected -- press Ctrl/Cmd+C';
+        setTimeout(function () { btn.textContent = original; }, 2500);
+      });
+    });
+  </script>
+
   <p style="text-align:center; margin-top:18px;"><a href="{{ url_for('index') }}">&larr; Scan another site</a></p>
 
 {% endif %}
