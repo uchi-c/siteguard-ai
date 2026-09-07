@@ -11,10 +11,12 @@ Run locally:
 Then open http://localhost:5000
 """
 import csv
+import hmac
 import os
 import secrets
 import threading
 from datetime import datetime, timezone
+from functools import wraps
 
 try:
     from dotenv import load_dotenv
@@ -22,7 +24,7 @@ try:
 except ImportError:
     pass  # fine to skip -- just export env vars directly instead
 
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf import CSRFProtect
@@ -30,13 +32,17 @@ from flask_wtf.csrf import CSRFError
 
 from scanner import run_scan
 from ai_narrative import generate_narrative, generate_outreach_message
-from storage import save_scan, load_scan
+from storage import save_scan, load_scan, list_recent_scans
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
+# Render sets RENDER=true in its runtime; only force HTTPS-only cookies
+# there, so plain-HTTP local dev (python app.py on localhost) still works.
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("RENDER") == "true"
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 csrf = CSRFProtect(app)
 
 # Each scan makes 15+ outbound requests to the target site, so an unlimited
@@ -56,6 +62,23 @@ def _log_lead(email: str, target: str, grade: str, score: int):
         if is_new:
             writer.writerow(["timestamp_utc", "email", "target", "grade", "score"])
         writer.writerow([datetime.now(timezone.utc).isoformat(), email, target, grade, score])
+
+
+def _read_leads() -> list[dict]:
+    if not os.path.exists(LEADS_FILE):
+        return []
+    with open(LEADS_FILE, newline="") as f:
+        rows = list(csv.DictReader(f))
+    return list(reversed(rows))  # most recent first
+
+
+def admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("is_admin"):
+            return redirect(url_for("admin_login_form"))
+        return view(*args, **kwargs)
+    return wrapped
 
 
 @app.route("/", methods=["GET"])
@@ -176,6 +199,40 @@ def batch_status(job_id):
     if not job:
         return {"error": "not found"}, 404
     return job
+
+
+@app.route("/admin/login", methods=["GET"])
+def admin_login_form():
+    if session.get("is_admin"):
+        return redirect(url_for("admin_dashboard"))
+    return render_template("admin_login.html")
+
+
+@app.route("/admin/login", methods=["POST"])
+@limiter.limit("5 per minute")
+def admin_login():
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    submitted = request.form.get("password", "")
+    if not admin_password:
+        flash("Admin login isn't configured -- set ADMIN_PASSWORD.")
+        return redirect(url_for("admin_login_form"))
+    if hmac.compare_digest(submitted, admin_password):
+        session["is_admin"] = True
+        return redirect(url_for("admin_dashboard"))
+    flash("Wrong password.")
+    return redirect(url_for("admin_login_form"))
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.pop("is_admin", None)
+    return redirect(url_for("admin_login_form"))
+
+
+@app.route("/admin", methods=["GET"])
+@admin_required
+def admin_dashboard():
+    return render_template("admin.html", leads=_read_leads(), scans=list_recent_scans())
 
 
 @app.errorhandler(429)

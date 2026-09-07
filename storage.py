@@ -72,3 +72,30 @@ def load_scan(scan_id: str) -> tuple[ScanResult, str, str] | None:
         error=d["error"],
     )
     return result, narrative, narrative_source
+
+
+def list_recent_scans(limit: int = 50) -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, target, data FROM scans ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+    out = []
+    for scan_id, created_at, target, data in rows:
+        d = json.loads(data)
+        result = ScanResult(
+            target=d["target"],
+            scanned_at=d["scanned_at"],
+            findings=[Finding(**f) for f in d["findings"]],
+            reachable=d["reachable"],
+            error=d["error"],
+        )
+        out.append({
+            "id": scan_id,
+            "created_at": created_at,
+            "target": target,
+            "grade": result.grade,
+            "score": result.score,
+        })
+    return out

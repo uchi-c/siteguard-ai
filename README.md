@@ -27,6 +27,11 @@ homepage) takes up to 8 URLs, one per line, and scans them in the
 background — each one gets a report link and a drafted outreach message,
 shown as they finish on a page that polls for progress.
 
+**`/admin`** is a password-gated view of every lead and recent scan, so you
+don't have to download `leads.csv` off the server to see who's converted.
+Set `ADMIN_PASSWORD` in `.env` to enable it — it's off (login fails
+outright) until you do.
+
 ## Run it locally
 
 ```bash
