@@ -21,12 +21,21 @@ except ImportError:
     pass  # fine to skip -- just export env vars directly instead
 
 from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from scanner import run_scan
 from ai_narrative import generate_narrative
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
+
+# Each scan makes 15+ outbound requests to the target site, so an unlimited
+# /scan is both an abuse vector (this server as a free scanning/SSRF-probing
+# proxy) and a way to run up Anthropic API costs. In-memory storage is fine
+# for a single-process deployment; swap storage_uri for Redis if this ever
+# runs with multiple gunicorn workers, since counts aren't shared across them.
+limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
 
 LEADS_FILE = os.path.join(os.path.dirname(__file__), "leads.csv")
 
@@ -46,6 +55,7 @@ def index():
 
 
 @app.route("/scan", methods=["POST"])
+@limiter.limit("5 per minute; 30 per hour")
 def scan():
     target = (request.form.get("target") or "").strip()
     if not target:
@@ -68,6 +78,12 @@ def scan():
         error=None,
         target=target,
     )
+
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    flash("Too many scans from this connection -- please wait a bit and try again.")
+    return redirect(url_for("index"))
 
 
 @app.route("/lead", methods=["POST"])
