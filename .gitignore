@@ -2,4 +2,8 @@
 __pycache__/
 *.pyc
 leads.csv
+scans.db
+scans.db-journal
+scans.db-wal
+scans.db-shm
 .venv/

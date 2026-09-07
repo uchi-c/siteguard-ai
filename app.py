@@ -28,6 +28,7 @@ from flask_wtf.csrf import CSRFError
 
 from scanner import run_scan
 from ai_narrative import generate_narrative, generate_outreach_message
+from storage import save_scan, load_scan
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
@@ -74,6 +75,7 @@ def scan():
 
     narrative, source = generate_narrative(result)
     top_finding = max(result.findings, key=lambda f: SEVERITY_RANK[f.severity]) if result.findings else None
+    scan_id = save_scan(result, narrative, source)
 
     return render_template(
         "report.html",
@@ -84,6 +86,30 @@ def scan():
         error=None,
         target=target,
         top_finding=top_finding,
+        scan_id=scan_id,
+    )
+
+
+@app.route("/report/<scan_id>", methods=["GET"])
+def view_report(scan_id):
+    loaded = load_scan(scan_id)
+    if not loaded:
+        flash("That report link doesn't exist or has expired.")
+        return redirect(url_for("index"))
+
+    result, narrative, source = loaded
+    top_finding = max(result.findings, key=lambda f: SEVERITY_RANK[f.severity]) if result.findings else None
+
+    return render_template(
+        "report.html",
+        result=result,
+        narrative=narrative,
+        narrative_source=source,
+        counts=result.counts(),
+        error=None,
+        target=result.target,
+        top_finding=top_finding,
+        scan_id=scan_id,
     )
 
 

@@ -17,6 +17,11 @@ copy-pasteable cold-outreach opener ("I ran a free security scan on
 yourbusiness.com and noticed...") — useful when you're the one scanning a
 prospect's site rather than waiting for them to find yours.
 
+Every scan is saved and gets a **shareable link** (`/report/<id>`) shown on
+the report page, so you can send someone the actual report instead of a
+screenshot — e.g. as the "here's what a secure setup looks like" proof
+mentioned below.
+
 ## Run it locally
 
 ```bash
@@ -31,7 +36,9 @@ narrative; add `ANTHROPIC_API_KEY` (from console.anthropic.com) to switch on
 the AI-written executive summary.
 
 Leads (email + scanned site + grade) are appended to `leads.csv` in this
-folder every time someone submits the "send me the fix plan" form.
+folder every time someone submits the "send me the fix plan" form. Every
+scan itself is saved to `scans.db` (SQLite) so its shareable link keeps
+working after the visitor leaves the page.
 
 ## What each file does
 
@@ -44,6 +51,8 @@ folder every time someone submits the "send me the fix plan" form.
   falls back to a fully-functional templated narrative if no API key is set
   or the API call fails, so the product never breaks in front of a prospect.
 - `app.py` — the Flask web app (form → scan → report → lead capture).
+- `storage.py` — saves each scan to `scans.db` (SQLite) and looks it back
+  up by ID for the `/report/<id>` shareable link.
 - `templates/` — the actual page design.
 - `test_target.py` — a deliberately broken local server, useful for
   demoing/testing without needing a real site. `python test_target.py` runs
@@ -68,10 +77,11 @@ GitHub App has access to this repo (`github.com/settings/installations` →
 Render → Configure → add the repo) — without that, pushes need a manual
 deploy from the Render dashboard.
 
-`leads.csv` on a free host's ephemeral filesystem can get wiped on redeploy —
-once you have a few real leads a day, swap `_log_lead()` in `app.py` for a
-row in Google Sheets (via a service account) or a proper DB. Small edit, not
-a rebuild.
+`leads.csv` and `scans.db` both live on the host's filesystem, which on a
+free tier is ephemeral and can get wiped on redeploy — a shared scan link
+sent out right before a redeploy could go stale. Once you have real volume,
+swap `_log_lead()` in `app.py` and `storage.py` for a managed DB (Render's
+free Postgres tier works). Small edit, not a rebuild.
 
 ## Using this as the actual side hustle (not just a demo)
 

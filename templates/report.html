@@ -32,6 +32,14 @@
         <strong style="color:var(--low);">{{ counts.low }}</strong> low
       </span>
     </div>
+
+    {% if scan_id %}
+    <div class="muted" style="font-size:12.5px; margin-top:18px; word-break:break-all;">
+      Shareable link: <a id="share-link-text" href="{{ request.host_url.rstrip('/') }}{{ url_for('view_report', scan_id=scan_id) }}">{{ request.host_url.rstrip('/') }}{{ url_for('view_report', scan_id=scan_id) }}</a>
+      <button type="button" id="share-copy"
+        style="width:auto; padding:4px 10px; font-size:12px; font-weight:600; margin-left:6px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); border-radius:8px;">Copy link</button>
+    </div>
+    {% endif %}
   </div>
 
   <div style="height:20px;"></div>
@@ -138,19 +146,16 @@
 
     document.getElementById('outreach-copy').addEventListener('click', function () {
       var ta = document.getElementById('outreach-text');
-      var btn = document.getElementById('outreach-copy');
-      var original = btn.textContent;
       ta.select();
-      navigator.clipboard.writeText(ta.value).then(function () {
-        btn.textContent = 'Copied!';
-        setTimeout(function () { btn.textContent = original; }, 1500);
-      }).catch(function () {
-        // Clipboard API blocked (permissions, older browser) -- text is
-        // already selected above, so Ctrl/Cmd+C still works manually.
-        btn.textContent = 'Selected -- press Ctrl/Cmd+C';
-        setTimeout(function () { btn.textContent = original; }, 2500);
-      });
+      siteguardCopy(ta.value, this);
     });
+
+    var shareCopyBtn = document.getElementById('share-copy');
+    if (shareCopyBtn) {
+      shareCopyBtn.addEventListener('click', function () {
+        siteguardCopy(document.getElementById('share-link-text').href, this);
+      });
+    }
   </script>
 
   <p style="text-align:center; margin-top:18px;"><a href="{{ url_for('index') }}">&larr; Scan another site</a></p>

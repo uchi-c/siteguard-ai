@@ -99,5 +99,17 @@
 
   <p class="footer-note">Passive, non-intrusive checks only &mdash; run this only against sites you own or are authorized to test.</p>
 </div>
+<script>
+  function siteguardCopy(text, btn) {
+    var original = btn.textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(function () {
+      btn.textContent = 'Copied!';
+      setTimeout(function () { btn.textContent = original; }, 1500);
+    }).catch(function () {
+      btn.textContent = 'Copy failed -- select and press Ctrl/Cmd+C';
+      setTimeout(function () { btn.textContent = original; }, 2500);
+    });
+  }
+</script>
 </body>
 </html>
