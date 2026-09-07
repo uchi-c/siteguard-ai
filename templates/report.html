@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Scan report &mdash; {{ target }}{% endblock %}
+{% block content %}
+
+{% if error %}
+  <div class="card">
+    <h2 style="margin-top:0;">Couldn't reach {{ target }}</h2>
+    <p class="muted">{{ error }}</p>
+    <a class="btn" href="{{ url_for('index') }}" style="display:inline-block; text-decoration:none; text-align:center; margin-top:12px;">Try another URL</a>
+  </div>
+{% else %}
+
+  <div class="card" style="text-align:center;">
+    <div class="muted" style="font-size:14px;">{{ result.target }}</div>
+    <div style="font-size:64px; font-weight:800; line-height:1; margin:10px 0;
+      color: {% if result.grade in ['A','B'] %}var(--accent){% elif result.grade == 'C' %}var(--medium){% else %}var(--critical){% endif %};">
+      {{ result.grade }}
+    </div>
+    <div class="muted">Security score: {{ result.score }}/100</div>
+
+    <div style="display:flex; gap:10px; justify-content:center; margin-top:20px; flex-wrap:wrap;">
+      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
+        <strong style="color:var(--critical);">{{ counts.critical }}</strong> critical
+      </span>
+      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
+        <strong style="color:var(--high);">{{ counts.high }}</strong> high
+      </span>
+      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
+        <strong style="color:var(--medium);">{{ counts.medium }}</strong> medium
+      </span>
+      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
+        <strong style="color:var(--low);">{{ counts.low }}</strong> low
+      </span>
+    </div>
+  </div>
+
+  <div style="height:20px;"></div>
+
+  <div class="card">
+    <div style="font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:10px;">
+      {{ "AI-written summary" if narrative_source == "ai" else "Summary" }}
+    </div>
+    <div style="white-space:pre-line; font-size:15px;">{{ narrative }}</div>
+  </div>
+
+  <div style="height:20px;"></div>
+
+  {% if result.findings %}
+  <div class="card">
+    <div style="font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:14px;">
+      Full findings ({{ result.findings|length }})
+    </div>
+    {% for f in result.findings %}
+    <div style="padding:12px 0; border-top:1px solid var(--border);">
+      <div style="display:flex; justify-content:space-between; gap:12px;">
+        <strong style="font-size:14.5px;">{{ f.title }}</strong>
+        <span style="font-size:11px; text-transform:uppercase; font-weight:700; white-space:nowrap;
+          color: var(--{{ f.severity }});">{{ f.severity }}</span>
+      </div>
+      <p class="muted" style="font-size:13.5px; margin:6px 0 0;">{{ f.detail }}</p>
+      <p style="font-size:13.5px; margin:6px 0 0;">Fix: {{ f.recommendation }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  <div style="height:20px;"></div>
+  {% endif %}
+
+  <div class="card" style="text-align:center;">
+    <h3 style="margin-top:0;">Want these fixed?</h3>
+    <p class="muted">Leave your email and we'll send a prioritized, no-obligation fix plan.</p>
+    <form action="{{ url_for('lead') }}" method="post">
+      <input type="hidden" name="target" value="{{ result.target }}">
+      <input type="hidden" name="grade" value="{{ result.grade }}">
+      <input type="hidden" name="score" value="{{ result.score }}">
+      <input type="email" name="email" placeholder="you@company.com" required>
+      <div style="height:14px;"></div>
+      <button type="submit">Send me the fix plan</button>
+    </form>
+  </div>
+
+  <p style="text-align:center; margin-top:18px;"><a href="{{ url_for('index') }}">&larr; Scan another site</a></p>
+
+{% endif %}
+{% endblock %}

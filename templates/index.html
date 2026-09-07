@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}SiteGuard AI &mdash; Free Security Scan{% endblock %}
+{% block content %}
+<div class="card">
+  <form action="{{ url_for('scan') }}" method="post">
+    <label for="target" style="display:block; font-weight:600; margin-bottom:8px;">Website URL</label>
+    <input type="text" id="target" name="target" placeholder="yourbusiness.com" required autofocus>
+    <div style="height:14px;"></div>
+    <button type="submit">Run free scan</button>
+  </form>
+</div>
+<p class="muted" style="text-align:center; margin-top:18px; font-size:14px;">
+  Checks HTTPS/TLS setup, security headers, exposed files, cookie security, and email spoofing protection (SPF/DMARC) &mdash; then an AI writes you a plain-English report.
+</p>
+{% endblock %}

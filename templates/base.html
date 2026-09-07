@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}SiteGuard AI{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121822;
+    --panel-2: #182231;
+    --border: #26313f;
+    --text: #e7edf3;
+    --muted: #93a3b5;
+    --accent: #3ddc97;
+    --accent-2: #5eb1ff;
+    --critical: #ff5c5c;
+    --high: #ff9f43;
+    --medium: #ffd93d;
+    --low: #6fb1ff;
+    --info: #93a3b5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
+  header.top { text-align: center; margin-bottom: 36px; }
+  header.top .logo {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 20px; letter-spacing: -0.02em;
+  }
+  header.top .logo .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+  header.top p { color: var(--muted); margin-top: 8px; font-size: 15px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px;
+  }
+  .flash {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; color: var(--accent);
+    font-size: 14px;
+  }
+  input[type=text], input[type=email] {
+    width: 100%;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 16px;
+  }
+  input:focus { outline: 2px solid var(--accent-2); }
+  button, .btn {
+    background: var(--accent);
+    color: #06140e;
+    border: none;
+    padding: 14px 22px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 16px;
+    cursor: pointer;
+    width: 100%;
+  }
+  button:hover, .btn:hover { filter: brightness(1.05); }
+  .muted { color: var(--muted); }
+  a { color: var(--accent-2); }
+  .footer-note { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo"><span class="dot"></span> SiteGuard AI</div>
+    <p>Free, AI-narrated security scan for your website</p>
+  </header>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+
+  <p class="footer-note">Passive, non-intrusive checks only &mdash; run this only against sites you own or are authorized to test.</p>
+</div>
+</body>
+</html>
