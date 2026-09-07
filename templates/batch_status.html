@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Batch scan progress{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h2 style="margin-top:0;">Batch scan</h2>
+  <p class="muted" id="batch-progress-text" style="font-size:14px;">
+    {{ job.done_count }} of {{ job.total }} scanned{{ "" if job.finished else "…" }}
+  </p>
+</div>
+
+<div style="height:20px;"></div>
+
+<div id="batch-items">
+  {% for item in job['items'] %}
+  <div class="card" id="batch-item-{{ loop.index0 }}" style="margin-bottom:16px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+      <strong style="word-break:break-all; font-size:15px;">{{ item.target }}</strong>
+      <span class="item-status muted" style="font-size:13px; white-space:nowrap;">
+        {% if item.status == "done" %}{{ item.grade }} &middot; {{ item.score }}/100
+        {% elif item.status == "error" %}couldn't reach
+        {% else %}scanning&hellip;{% endif %}
+      </span>
+    </div>
+    <div class="item-body" style="margin-top:10px; {% if item.status != 'done' %}display:none;{% endif %}">
+      {% if item.status == "done" %}
+      <p class="muted item-outreach" style="font-size:13.5px; margin:0 0 8px;">{{ item.outreach }}</p>
+      <a class="item-link" href="{{ url_for('view_report', scan_id=item.scan_id) }}" style="font-size:13.5px;">View full report &rarr;</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('batch_form') }}">&larr; Scan another batch</a></p>
+
+<script>
+  var jobId = {{ job_id | tojson }};
+  var finished = {{ 'true' if job.finished else 'false' }};
+
+  function renderItem(i, item) {
+    var el = document.getElementById('batch-item-' + i);
+    if (!el) return;
+    var statusEl = el.querySelector('.item-status');
+    var bodyEl = el.querySelector('.item-body');
+
+    if (item.status === 'done') {
+      statusEl.textContent = item.grade + ' · ' + item.score + '/100';
+      bodyEl.style.display = 'block';
+      if (!bodyEl.querySelector('.item-outreach')) {
+        bodyEl.innerHTML =
+          '<p class="muted item-outreach" style="font-size:13.5px; margin:0 0 8px;"></p>' +
+          '<a class="item-link" style="font-size:13.5px;">View full report &rarr;</a>';
+      }
+      bodyEl.querySelector('.item-outreach').textContent = item.outreach;
+      bodyEl.querySelector('.item-link').href = '/report/' + item.scan_id;
+    } else if (item.status === 'error') {
+      statusEl.textContent = "couldn't reach";
+    }
+  }
+
+  function poll() {
+    fetch('/batch/' + jobId + '/status')
+      .then(function (r) { return r.json(); })
+      .then(function (job) {
+        document.getElementById('batch-progress-text').textContent =
+          job.done_count + ' of ' + job.total + ' scanned' + (job.finished ? '' : '…');
+        job.items.forEach(function (item, i) { renderItem(i, item); });
+        if (!job.finished) {
+          setTimeout(poll, 2000);
+        }
+      })
+      .catch(function () {
+        setTimeout(poll, 3000);
+      });
+  }
+
+  if (!finished) {
+    setTimeout(poll, 2000);
+  }
+</script>
+
+{% endblock %}

@@ -12,6 +12,8 @@ Then open http://localhost:5000
 """
 import csv
 import os
+import secrets
+import threading
 from datetime import datetime, timezone
 
 try:
@@ -29,6 +31,7 @@ from flask_wtf.csrf import CSRFError
 from scanner import run_scan
 from ai_narrative import generate_narrative, generate_outreach_message
 from storage import save_scan, load_scan
+from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
@@ -124,6 +127,55 @@ def outreach():
         return {"error": "Missing target."}, 400
     message, source = generate_outreach_message(target, top_title, top_detail, has_findings)
     return {"message": message, "source": source}
+
+
+@app.route("/batch", methods=["GET"])
+def batch_form():
+    return render_template("batch.html", max_targets=MAX_BATCH_TARGETS)
+
+
+@app.route("/batch", methods=["POST"])
+@limiter.limit("3 per hour")
+def batch_start():
+    raw = request.form.get("targets", "")
+    seen = set()
+    targets = []
+    for line in raw.splitlines():
+        t = line.strip()
+        if t and t not in seen:
+            targets.append(t)
+            seen.add(t)
+
+    if not targets:
+        flash("Enter at least one website URL, one per line.")
+        return redirect(url_for("batch_form"))
+
+    if len(targets) > MAX_BATCH_TARGETS:
+        flash(f"Only scanning the first {MAX_BATCH_TARGETS} URLs -- that's the batch limit.")
+        targets = targets[:MAX_BATCH_TARGETS]
+
+    job_id = secrets.token_urlsafe(8)
+    create_job(job_id, targets)
+    threading.Thread(target=run_job, args=(job_id,), daemon=True).start()
+
+    return redirect(url_for("batch_view", job_id=job_id))
+
+
+@app.route("/batch/<job_id>", methods=["GET"])
+def batch_view(job_id):
+    job = get_job(job_id)
+    if not job:
+        flash("That batch job doesn't exist or has expired.")
+        return redirect(url_for("batch_form"))
+    return render_template("batch_status.html", job=job, job_id=job_id)
+
+
+@app.route("/batch/<job_id>/status", methods=["GET"])
+def batch_status(job_id):
+    job = get_job(job_id)
+    if not job:
+        return {"error": "not found"}, 404
+    return job
 
 
 @app.errorhandler(429)

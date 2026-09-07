@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}SiteGuard AI &mdash; Batch Scan{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0;">Batch scan</h2>
+  <p class="muted" style="font-size:14px;">
+    Paste up to {{ max_targets }} website URLs, one per line. Each gets a full
+    scan, a shareable report link, and a drafted outreach message &mdash;
+    useful for working through a prospect list instead of one site at a time.
+  </p>
+  <form action="{{ url_for('batch_start') }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <textarea name="targets" rows="8" required
+      placeholder="prospect1.com&#10;prospect2.com&#10;prospect3.com"
+      style="width:100%; padding:14px 16px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-family:inherit; font-size:15px; resize:vertical;"></textarea>
+    <div style="height:14px;"></div>
+    <button type="submit">Scan them all</button>
+  </form>
+</div>
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('index') }}">&larr; Back to single scan</a></p>
+{% endblock %}

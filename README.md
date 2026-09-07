@@ -22,6 +22,11 @@ the report page, so you can send someone the actual report instead of a
 screenshot — e.g. as the "here's what a secure setup looks like" proof
 mentioned below.
 
+For working a whole prospect list at once, **`/batch`** (linked from the
+homepage) takes up to 8 URLs, one per line, and scans them in the
+background — each one gets a report link and a drafted outreach message,
+shown as they finish on a page that polls for progress.
+
 ## Run it locally
 
 ```bash
@@ -53,6 +58,9 @@ working after the visitor leaves the page.
 - `app.py` — the Flask web app (form → scan → report → lead capture).
 - `storage.py` — saves each scan to `scans.db` (SQLite) and looks it back
   up by ID for the `/report/<id>` shareable link.
+- `batch.py` — runs a `/batch` job (multiple scans + outreach drafts) on a
+  background thread so the request doesn't have to stay open for minutes;
+  job state is in-memory only, so it resets on restart.
 - `templates/` — the actual page design.
 - `test_target.py` — a deliberately broken local server, useful for
   demoing/testing without needing a real site. `python test_target.py` runs

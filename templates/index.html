@@ -13,6 +13,9 @@
 <p class="muted" style="text-align:center; margin-top:18px; font-size:14px;" id="scan-hint">
   Checks HTTPS/TLS setup, security headers, exposed files, cookie security, and email spoofing protection (SPF/DMARC) &mdash; then an AI writes you a plain-English report.
 </p>
+<p class="muted" style="text-align:center; margin-top:10px; font-size:13px;">
+  Scanning several prospects? <a href="{{ url_for('batch_form') }}">Batch scan &rarr;</a>
+</p>
 <script>
   document.getElementById('scan-form').addEventListener('submit', function (e) {
     var btn = document.getElementById('scan-btn');
