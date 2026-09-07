@@ -69,6 +69,7 @@
     <h3 style="margin-top:0;">Want these fixed?</h3>
     <p class="muted">Leave your email and we'll send a prioritized, no-obligation fix plan.</p>
     <form action="{{ url_for('lead') }}" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="target" value="{{ result.target }}">
       <input type="hidden" name="grade" value="{{ result.grade }}">
       <input type="hidden" name="score" value="{{ result.score }}">

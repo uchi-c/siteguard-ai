@@ -23,12 +23,15 @@ except ImportError:
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_wtf import CSRFProtect
+from flask_wtf.csrf import CSRFError
 
 from scanner import run_scan
 from ai_narrative import generate_narrative
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
+csrf = CSRFProtect(app)
 
 # Each scan makes 15+ outbound requests to the target site, so an unlimited
 # /scan is both an abuse vector (this server as a free scanning/SSRF-probing
@@ -83,6 +86,12 @@ def scan():
 @app.errorhandler(429)
 def ratelimit_handler(e):
     flash("Too many scans from this connection -- please wait a bit and try again.")
+    return redirect(url_for("index"))
+
+
+@app.errorhandler(CSRFError)
+def csrf_error_handler(e):
+    flash("Your session expired -- please try again.")
     return redirect(url_for("index"))
 
 

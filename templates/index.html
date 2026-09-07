@@ -3,6 +3,7 @@
 {% block content %}
 <div class="card">
   <form action="{{ url_for('scan') }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="target" style="display:block; font-weight:600; margin-bottom:8px;">Website URL</label>
     <input type="text" id="target" name="target" placeholder="yourbusiness.com" required autofocus>
     <div style="height:14px;"></div>
