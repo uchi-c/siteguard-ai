@@ -11,9 +11,11 @@ still only be pointed at sites you own or a client has asked you to check.
 """
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import os
 import re
+import secrets
 import socket
 import ssl
 import time
@@ -260,11 +262,40 @@ def _check_dns_email_security(hostname: str, result: ScanResult):
 
 
 def _check_sensitive_paths(base_url: str, result: ScanResult):
+    # Some hosts (e.g. SPA platforms like Vercel with a catch-all rewrite)
+    # return 200 with the same index page for *any* path, including
+    # nonexistent ones. Probe a random path first to learn what a "not
+    # found" response looks like here, so we only flag a sensitive path
+    # when its response actually differs from that baseline.
+    baseline_status = None
+    baseline_hash = None
+    baseline_etag = None
+    try:
+        probe_path = f"/__siteguard_baseline_{secrets.token_hex(8)}"
+        br = requests.get(base_url + probe_path, headers={"User-Agent": USER_AGENT},
+                           timeout=TIMEOUT, allow_redirects=False)
+        baseline_status = br.status_code
+        baseline_hash = hashlib.sha256(br.content).hexdigest()
+        baseline_etag = br.headers.get("ETag")
+    except requests.RequestException:
+        pass  # fall back to flagging on bare 200, as before
+    time.sleep(0.05)
+
     for path in SENSITIVE_PATHS:
         try:
             r = requests.get(base_url + path, headers={"User-Agent": USER_AGENT},
                               timeout=TIMEOUT, allow_redirects=False)
-            if r.status_code == 200 and len(r.content) > 0:
+            if r.status_code != 200 or len(r.content) == 0:
+                continue
+            body_hash = hashlib.sha256(r.content).hexdigest()
+            etag = r.headers.get("ETag")
+            matches_baseline = (
+                baseline_status is not None
+                and r.status_code == baseline_status
+                and body_hash == baseline_hash
+                and etag == baseline_etag
+            )
+            if not matches_baseline:
                 result.add(f"exposed-{path}", f"Potentially exposed file: {path}", "high",
                            f"GET {path} returned HTTP 200. If this is the real file (not a custom "
                            f"404 page), sensitive data may be publicly accessible.",
