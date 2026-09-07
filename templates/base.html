@@ -69,6 +69,13 @@
     width: 100%;
   }
   button:hover, .btn:hover { filter: brightness(1.05); }
+  button:disabled { opacity: .85; cursor: wait; filter: none; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; margin-right: 8px; vertical-align: -3px;
+    border: 3px solid rgba(6,20,14,0.3); border-top-color: #06140e; border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .muted { color: var(--muted); }
   a { color: var(--accent-2); }
   .footer-note { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; }

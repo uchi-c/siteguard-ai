@@ -2,15 +2,25 @@
 {% block title %}SiteGuard AI &mdash; Free Security Scan{% endblock %}
 {% block content %}
 <div class="card">
-  <form action="{{ url_for('scan') }}" method="post">
+  <form action="{{ url_for('scan') }}" method="post" id="scan-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="target" style="display:block; font-weight:600; margin-bottom:8px;">Website URL</label>
     <input type="text" id="target" name="target" placeholder="yourbusiness.com" required autofocus>
     <div style="height:14px;"></div>
-    <button type="submit">Run free scan</button>
+    <button type="submit" id="scan-btn">Run free scan</button>
   </form>
 </div>
-<p class="muted" style="text-align:center; margin-top:18px; font-size:14px;">
+<p class="muted" style="text-align:center; margin-top:18px; font-size:14px;" id="scan-hint">
   Checks HTTPS/TLS setup, security headers, exposed files, cookie security, and email spoofing protection (SPF/DMARC) &mdash; then an AI writes you a plain-English report.
 </p>
+<script>
+  document.getElementById('scan-form').addEventListener('submit', function (e) {
+    var btn = document.getElementById('scan-btn');
+    if (btn.disabled) { e.preventDefault(); return; }
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Scanning…';
+    document.getElementById('scan-hint').textContent =
+      'Checking headers, TLS, DNS records, and known exposed paths — usually 5–15 seconds.';
+  });
+</script>
 {% endblock %}
