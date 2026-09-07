@@ -41,7 +41,11 @@ folder every time someone submits the "send me the fix plan" form.
 - `templates/` — the actual page design.
 - `test_target.py` — a deliberately broken local server, useful for
   demoing/testing without needing a real site. `python test_target.py` runs
-  it on port 5055; not part of the product itself.
+  it on port 5055; not part of the product itself. Scan targets are
+  validated to block private/internal addresses (so a visitor can't use the
+  form to probe your own infrastructure), which also blocks localhost by
+  default — set `SITEGUARD_ALLOW_PRIVATE_TARGETS=1` in `.env` to scan
+  `test_target.py` locally.
 
 ## Deploying it so it has a real URL
 

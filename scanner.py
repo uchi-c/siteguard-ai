@@ -12,6 +12,7 @@ still only be pointed at sites you own or a client has asked you to check.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import socket
 import ssl
@@ -30,6 +31,13 @@ except ImportError:  # pragma: no cover
 
 USER_AGENT = "SiteGuardAI-Scanner/1.0 (+passive security scan; contact via report)"
 TIMEOUT = 8
+MAX_REDIRECTS = 5
+
+# Visitors control the scan target, so it must never be usable to make this
+# server issue requests to internal/private infrastructure (cloud metadata
+# endpoints, localhost, RFC1918 ranges, etc). Set to "1" only for local
+# demoing against test_target.py, which serves on localhost.
+ALLOW_PRIVATE_TARGETS = os.environ.get("SITEGUARD_ALLOW_PRIVATE_TARGETS") == "1"
 
 SEVERITY_WEIGHT = {"critical": 25, "high": 15, "medium": 8, "low": 3, "info": 0}
 
@@ -107,6 +115,27 @@ def _normalize_url(target: str) -> str:
     if not re.match(r"^https?://", target, re.I):
         target = "https://" + target
     return target.rstrip("/")
+
+
+class UnsafeTargetError(Exception):
+    """Raised when a scan target resolves to a private/internal address."""
+
+
+def _resolve_and_validate_host(hostname: str) -> None:
+    if ALLOW_PRIVATE_TARGETS:
+        return
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        raise UnsafeTargetError(f"Could not resolve '{hostname}': {e}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise UnsafeTargetError(
+                f"Refusing to scan '{hostname}': resolves to a private/internal "
+                f"address ({ip}). Only public websites can be scanned."
+            )
 
 
 def _check_headers(resp: requests.Response, result: ScanResult):
@@ -246,13 +275,7 @@ def _check_sensitive_paths(base_url: str, result: ScanResult):
         time.sleep(0.05)  # be polite
 
 
-def _check_mixed_content_and_js(base_url: str, result: ScanResult):
-    try:
-        r = requests.get(base_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-        html = r.text
-    except requests.RequestException:
-        return
-
+def _check_mixed_content_and_js(base_url: str, html: str, result: ScanResult):
     if base_url.startswith("https://"):
         http_srcs = re.findall(r'(?:src|href)=["\']http://[^"\']+', html, re.I)
         if http_srcs:
@@ -273,8 +296,21 @@ def run_scan(target: str) -> ScanResult:
     result = ScanResult(target=url, scanned_at=datetime.now(timezone.utc).isoformat())
 
     try:
-        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, allow_redirects=True)
-    except requests.RequestException as e:
+        _resolve_and_validate_host(hostname)
+        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, allow_redirects=False)
+        hops = 0
+        while resp.is_redirect and hops < MAX_REDIRECTS:
+            location = resp.headers.get("Location")
+            if not location:
+                break
+            url = urljoin(resp.url, location)
+            hostname = urlparse(url).hostname
+            if not hostname:
+                break
+            _resolve_and_validate_host(hostname)
+            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, allow_redirects=False)
+            hops += 1
+    except (requests.RequestException, UnsafeTargetError) as e:
         result.reachable = False
         result.error = str(e)
         return result
@@ -289,6 +325,6 @@ def run_scan(target: str) -> ScanResult:
 
     _check_dns_email_security(hostname, result)
     _check_sensitive_paths(url, result)
-    _check_mixed_content_and_js(url, result)
+    _check_mixed_content_and_js(url, resp.text, result)
 
     return result
