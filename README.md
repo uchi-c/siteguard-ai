@@ -50,6 +50,23 @@ folder every time someone submits the "send me the fix plan" form. Every
 scan itself is saved to `scans.db` (SQLite) so its shareable link keeps
 working after the visitor leaves the page.
 
+## Running the tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Covers the security-critical paths (SSRF guard, CSRF, admin auth, rate
+limiting) plus the core logic (grading, the rule-based AI fallback, storage
+round-trips, batch job handling). The scanner tests run against two real
+local Flask servers spun up for the test session — `test_target.py` itself
+(the known-bad fixture used for manual testing) and a small SPA-fallback
+stand-in that regression-tests the false-positive fix — rather than mocking
+HTTP, so they exercise the actual scan pipeline. No network access or API
+key needed; everything that would call Claude is tested against the
+rule-based fallback path.
+
 ## What each file does
 
 - `scanner.py` — the actual scan logic. Passive only: normal HTTP(S)
