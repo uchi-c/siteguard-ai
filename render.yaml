@@ -10,3 +10,12 @@ services:
         generateValue: true
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Render's build and runtime steps use separate filesystems -- only
+      # the project directory (repo + its venv) survives the handoff, not
+      # the OS-level cache dir Playwright installs browsers to by default
+      # (~/.cache/ms-playwright, outside the project tree). This makes it
+      # install into the venv instead, which does survive. Without this,
+      # the Chromium binary downloads fine during build but is simply gone
+      # by the time the app tries to launch it at runtime.
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"

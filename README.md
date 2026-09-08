@@ -196,7 +196,8 @@ rule-based fallback path.
 - `pdf_export.py` / `pdf_export_worker.py` — renders a report to PDF with
   headless Chromium print-to-PDF, same subprocess-isolation pattern as
   `js_discovery.py`. Used by `/report/<id>/pdf` and by the lead-capture
-  email.
+  email. Both this and `js_discovery.py` need `PLAYWRIGHT_BROWSERS_PATH=0`
+  set (see below) or Chromium won't be findable at runtime on Render.
 - `emailer.py` — sends a lead their report by email via SMTP (Gmail by
   default) when they submit the fix-plan form. Off until `SMTP_USERNAME`/
   `SMTP_PASSWORD` are set; never raises, so a bad config or network hiccup
@@ -217,6 +218,18 @@ rule-based fallback path.
 ## Deploying it so it has a real URL
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/uchi-c/siteguard-ai)
+
+If you're using headless-Chromium features (active-scan's SPA discovery
+fallback, PDF export): Render's build and runtime steps run in separate
+filesystems, and only the project directory (repo + its venv) survives
+that handoff -- Playwright's default browser install location
+(`~/.cache/ms-playwright`) does not. `render.yaml` sets
+`PLAYWRIGHT_BROWSERS_PATH=0` to install Chromium inside the venv instead,
+which does survive. Without this, Chromium downloads fine during the build
+and then simply isn't there when the app tries to launch it -- both
+features silently degrade (no crash, just "found nothing" / "couldn't
+generate a PDF"), so this is easy to miss without checking the app logs
+for `[pdf_export]`/`[js_discovery]` lines.
 
 Free tiers that work fine for this (Flask + gunicorn, no database beyond the
 CSV): **Render** (render.com — this repo includes a `render.yaml` blueprint,
