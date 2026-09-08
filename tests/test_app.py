@@ -111,3 +111,68 @@ def test_lead_appears_in_admin_dashboard(client, monkeypatch):
     resp = client.get("/admin")
     assert b"prospect@test.com" in resp.data
     assert b"Leads (1)" in resp.data
+
+
+# --- Gated active-testing mode -----------------------------------------------
+
+def test_active_scan_form_requires_admin_login(client, monkeypatch):
+    monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", True)
+    resp = client.get("/admin/active-scan")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_active_scan_disabled_by_default(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", False)
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.get("/admin/active-scan", follow_redirects=True)
+    assert b"disabled on this deployment" in resp.data
+
+
+def test_active_scan_start_rejects_mismatched_hostname(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", True)
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/active-scan", data={
+        "target": "https://example.test", "confirm_host": "wrong-host.test", "authorized": "on",
+    }, follow_redirects=True)
+    assert b"didn&#39;t match" in resp.data or b"didn't match" in resp.data
+
+
+def test_active_scan_start_requires_authorization_checkbox(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", True)
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/active-scan", data={
+        "target": "https://example.test", "confirm_host": "example.test",
+    }, follow_redirects=True)
+    assert b"confirm you" in resp.data
+
+
+def test_active_scan_start_logs_authorization_and_runs(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", True)
+
+    logged = {}
+    monkeypatch.setattr(app_module, "log_active_scan_authorization",
+                         lambda target, hostname: logged.update(target=target, hostname=hostname))
+
+    from active_scan import ActiveScanResult
+    monkeypatch.setattr(app_module, "run_active_scan",
+                         lambda target: ActiveScanResult(target=target, scanned_at="t", findings=[]))
+
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/active-scan", data={
+        "target": "https://example.test", "confirm_host": "example.test", "authorized": "on",
+    }, follow_redirects=True)
+
+    assert resp.status_code == 200
+    assert logged == {"target": "https://example.test", "hostname": "example.test"}
+    assert b"No issues found by these checks." in resp.data
+
+
+def test_active_scan_audit_requires_admin_login(client):
+    resp = client.get("/admin/active-scan/audit")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]

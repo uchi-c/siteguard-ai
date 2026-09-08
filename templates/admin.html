@@ -13,6 +13,25 @@
 <div style="height:20px;"></div>
 
 <div class="card">
+  <h3 style="margin-top:0;">Active vulnerability testing</h3>
+  {% if active_testing_enabled %}
+  <p class="muted" style="font-size:14px;">
+    Enabled on this deployment. Only use it against sites you're explicitly
+    authorized to test.
+  </p>
+  <a href="{{ url_for('active_scan_form') }}" class="btn" style="display:inline-block; text-decoration:none; text-align:center;">Run active tests</a>
+  {% else %}
+  <p class="muted" style="font-size:14px;">
+    Disabled on this deployment. Set <code>ACTIVE_TESTING_ENABLED=1</code>
+    to turn it on &mdash; it stays off by default even with this code
+    deployed.
+  </p>
+  {% endif %}
+</div>
+
+<div style="height:20px;"></div>
+
+<div class="card">
   <h3 style="margin-top:0;">Leads ({{ leads|length }})</h3>
   {% if leads %}
   <div style="overflow-x:auto;">

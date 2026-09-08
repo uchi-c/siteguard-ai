@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Active testing{% endblock %}
+{% block content %}
+<div class="card" style="border-color: var(--critical);">
+  <h2 style="margin-top:0; color: var(--critical);">Active vulnerability testing</h2>
+  <p class="muted" style="font-size:14px;">
+    This sends real, non-destructive detection probes to the target: a
+    reflected-XSS marker, an error-based SQLi probe, and up to
+    {{ 3 }} well-known default-credential attempts against any login form
+    found. Unlike the passive scanner, this is <strong>not</strong>
+    something you can legally run against a site you don't have explicit
+    authorization to test &mdash; unauthorized use is a criminal offense in
+    most jurisdictions (e.g. the US Computer Fraud and Abuse Act),
+    regardless of intent. Every run here is logged.
+  </p>
+  <form action="{{ url_for('active_scan_start') }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <label for="target" style="display:block; font-weight:600; margin-bottom:8px;">Target URL</label>
+    <input type="text" id="target" name="target" placeholder="client-site.com" required
+      oninput="document.getElementById('confirm-hint').textContent =
+        'Type exactly: ' + this.value.replace(/^https?:\/\//,'').split('/')[0];">
+
+    <div style="height:14px;"></div>
+
+    <label for="confirm_host" style="display:block; font-weight:600; margin-bottom:8px;">
+      Confirm the hostname to proceed
+    </label>
+    <p class="muted" id="confirm-hint" style="font-size:13px; margin:0 0 8px;">
+      Type the hostname above first.
+    </p>
+    <input type="text" id="confirm_host" name="confirm_host" placeholder="Type the hostname exactly" required>
+
+    <div style="height:14px;"></div>
+
+    <label style="display:flex; align-items:flex-start; gap:8px; font-size:14px;">
+      <input type="checkbox" name="authorized" style="width:auto; margin-top:3px;" required>
+      <span>I have explicit authorization (a signed pentest engagement, or I
+      own this infrastructure) to run active security tests against this
+      target.</span>
+    </label>
+
+    <div style="height:18px;"></div>
+    <button type="submit" style="background: var(--critical); color: #1a0505;">Run active tests</button>
+  </form>
+</div>
+<p style="text-align:center; margin-top:18px;">
+  <a href="{{ url_for('admin_dashboard') }}">&larr; Back to admin</a> &middot;
+  <a href="{{ url_for('active_scan_audit') }}">View authorization log</a>
+</p>
+{% endblock %}

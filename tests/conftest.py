@@ -83,6 +83,51 @@ def cloudflare_target_url():
     srv.shutdown()
 
 
+@pytest.fixture(scope="session")
+def vulnerable_target_url():
+    """A deliberately vulnerable local app, used ONLY to validate
+    active_scan.py's detection logic in a controlled, offline setting --
+    reflected XSS on two params, error-based SQLi on one, and a login form
+    that accepts one specific weak credential pair. No external network
+    involved, matches the pattern already used by test_target.py."""
+    from flask import Flask, redirect, request as flask_request
+
+    vuln = Flask("vulnerable_test_target")
+
+    @vuln.route("/")
+    def home():
+        q = flask_request.args.get("q", "")
+        return (f'<html><body>'
+                f'<a href="/?q=test">self link</a>'
+                f'<form method="get" action="/search"><input name="term"></form>'
+                f'Results: {q}'
+                f'</body></html>')
+
+    @vuln.route("/search")
+    def search():
+        term = flask_request.args.get("term", "")
+        if "'" in term:
+            return "Error: you have an error in your SQL syntax near...", 500
+        return f"<html><body>Search results for: {term}</body></html>"
+
+    @vuln.route("/admin", methods=["GET"])
+    def admin_login_page():
+        return ('<html><body><form method="post" action="/admin">'
+                '<input name="username"><input type="password" name="password">'
+                '</form></body></html>')
+
+    @vuln.route("/admin", methods=["POST"])
+    def admin_login_post():
+        if flask_request.form.get("username") == "admin" and flask_request.form.get("password") == "admin":
+            return redirect("/dashboard", code=302)
+        return redirect("/admin/login?error=invalid", code=302)
+
+    srv = _ServerThread(vuln)
+    srv.start()
+    yield f"http://127.0.0.1:{srv.port}"
+    srv.shutdown()
+
+
 @pytest.fixture
 def allow_private(monkeypatch):
     """Lets the SSRF guard through for tests that deliberately scan 127.0.0.1."""
@@ -94,7 +139,16 @@ def client(tmp_path, monkeypatch):
     """A Flask test client with leads/scans redirected to a temp dir, CSRF
     and rate limiting off by default (individual tests re-enable either
     when that's exactly what they're testing), and no ADMIN_PASSWORD
-    unless a test sets one."""
+    unless a test sets one.
+
+    RATELIMIT_ENABLED=False only skips *enforcement* -- Flask-Limiter's
+    in-memory storage still records every hit. Since Werkzeug's test client
+    always uses 127.0.0.1, that key is shared across every test in the
+    session, so counts silently accumulate and can trip a real 429 in a
+    later test that never touched the rate-limit config itself. Reset the
+    limiter's storage before every test, not just the enabled flag.
+    """
+    app_module.limiter.reset()
     monkeypatch.setattr(app_module, "LEADS_FILE", str(tmp_path / "leads.csv"))
     monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)

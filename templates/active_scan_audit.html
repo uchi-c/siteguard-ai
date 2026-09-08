@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Active-scan authorization log{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0;">Authorization log ({{ entries|length }})</h2>
+  <p class="muted" style="font-size:13px;">Every confirmed active-scan run, most recent first.</p>
+  {% if entries %}
+  <div style="overflow-x:auto;">
+    <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
+      <thead>
+        <tr style="text-align:left; border-bottom:1px solid var(--border);">
+          <th style="padding:8px 6px;">When (UTC)</th>
+          <th style="padding:8px 6px;">Target</th>
+          <th style="padding:8px 6px;">Confirmed hostname</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr style="border-bottom:1px solid var(--border);">
+          <td class="muted" style="padding:8px 6px; white-space:nowrap;">{{ e.created_at[:16].replace('T', ' ') }}</td>
+          <td style="padding:8px 6px; word-break:break-all;">{{ e.target }}</td>
+          <td style="padding:8px 6px; word-break:break-all;">{{ e.hostname }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No active scans have been run yet.</p>
+  {% endif %}
+</div>
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('active_scan_form') }}">&larr; Back</a></p>
+{% endblock %}

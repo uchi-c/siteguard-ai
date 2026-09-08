@@ -32,7 +32,35 @@ def _connect():
         "narrative TEXT, "
         "narrative_source TEXT)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS active_scan_audit ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "created_at TEXT NOT NULL, "
+        "target TEXT NOT NULL, "
+        "hostname TEXT NOT NULL)"
+    )
     return conn
+
+
+def log_active_scan_authorization(target: str, hostname: str) -> None:
+    """Audit trail for the gated active-testing mode: every run is logged
+    with the target and the confirmed hostname, regardless of outcome."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO active_scan_audit (created_at, target, hostname) VALUES (?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), target, hostname),
+        )
+        conn.commit()
+
+
+def list_active_scan_audit(limit: int = 50) -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT created_at, target, hostname FROM active_scan_audit "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [{"created_at": c, "target": t, "hostname": h} for c, t, h in rows]
 
 
 def save_scan(result: ScanResult, narrative: str, narrative_source: str) -> str:

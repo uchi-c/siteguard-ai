@@ -40,6 +40,30 @@ don't have to download `leads.csv` off the server to see who's converted.
 Set `ADMIN_PASSWORD` in `.env` to enable it — it's off (login fails
 outright) until you do.
 
+### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
+
+Everything above is passive (a normal browser visit generates the same
+traffic). This is not: it's a **gated, admin-only mode** that sends real,
+non-destructive *detection* probes — a reflected-XSS marker, an error-based
+SQLi probe, and up to 3 well-known default-credential attempts against any
+login form found. It does not extract, modify, or exfiltrate anything, but
+it is still active testing, and **running it against a site you don't have
+explicit authorization to test is a criminal offense in most jurisdictions**
+(e.g. the US Computer Fraud and Abuse Act), regardless of intent.
+
+It's gated at every layer independently:
+- **Off by default.** Set `ACTIVE_TESTING_ENABLED=1` to turn it on at all —
+  the routes exist in code either way, but refuse to run without this.
+- **Admin-only**, same login as `/admin`.
+- **Per-target confirmation.** Before each run, you type the exact target
+  hostname to confirm — a deliberate friction point, not just a checkbox.
+- **Every run is logged** (target, hostname, timestamp) to an audit trail
+  visible at `/admin/active-scan/audit`.
+
+Use it only for engagements you're actually authorized for (a signed
+pentest, or your own infrastructure) — not the same free-for-all as the
+passive scanner and `/batch`.
+
 ## Run it locally
 
 ```bash
@@ -91,6 +115,10 @@ rule-based fallback path.
 - `batch.py` — runs a `/batch` job (multiple scans + outreach drafts) on a
   background thread so the request doesn't have to stay open for minutes;
   job state is in-memory only, so it resets on restart.
+- `active_scan.py` — the gated active-testing probes (see above). Off by
+  default; requires `ACTIVE_TESTING_ENABLED=1`, admin login, and a typed
+  per-target confirmation even when on. Not passive -- read the section
+  above before touching this.
 - `templates/` — the actual page design.
 - `test_target.py` — a deliberately broken local server, useful for
   demoing/testing without needing a real site. `python test_target.py` runs

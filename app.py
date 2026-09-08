@@ -17,6 +17,7 @@ import secrets
 import threading
 from datetime import datetime, timezone
 from functools import wraps
+from urllib.parse import urlparse
 
 try:
     from dotenv import load_dotenv
@@ -30,12 +31,21 @@ from flask_limiter.util import get_remote_address
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError
 
-from scanner import run_scan
+from scanner import run_scan, _normalize_url
 from ai_narrative import generate_narrative, generate_outreach_message
-from storage import save_scan, load_scan, list_recent_scans
+from storage import (
+    save_scan, load_scan, list_recent_scans,
+    log_active_scan_authorization, list_active_scan_audit,
+)
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
+from active_scan import run_active_scan
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+# Deployment-level kill switch for the gated active-testing mode (real
+# non-destructive attack probes, not passive checks). Off unless the
+# operator explicitly sets it -- adding the route doesn't make it usable.
+ACTIVE_TESTING_ENABLED = os.environ.get("ACTIVE_TESTING_ENABLED") == "1"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
@@ -232,7 +242,53 @@ def admin_logout():
 @app.route("/admin", methods=["GET"])
 @admin_required
 def admin_dashboard():
-    return render_template("admin.html", leads=_read_leads(), scans=list_recent_scans())
+    return render_template(
+        "admin.html",
+        leads=_read_leads(),
+        scans=list_recent_scans(),
+        active_testing_enabled=ACTIVE_TESTING_ENABLED,
+    )
+
+
+@app.route("/admin/active-scan", methods=["GET"])
+@admin_required
+def active_scan_form():
+    if not ACTIVE_TESTING_ENABLED:
+        flash("Active testing is disabled on this deployment (set ACTIVE_TESTING_ENABLED=1 to enable).")
+        return redirect(url_for("admin_dashboard"))
+    return render_template("active_scan_form.html")
+
+
+@app.route("/admin/active-scan", methods=["POST"])
+@admin_required
+@limiter.limit("5 per hour")
+def active_scan_start():
+    if not ACTIVE_TESTING_ENABLED:
+        flash("Active testing is disabled on this deployment.")
+        return redirect(url_for("admin_dashboard"))
+
+    target = (request.form.get("target") or "").strip()
+    confirm_host = (request.form.get("confirm_host") or "").strip()
+    authorized = request.form.get("authorized") == "on"
+
+    if not target or not authorized:
+        flash("Enter a target and confirm you're authorized to test it.")
+        return redirect(url_for("active_scan_form"))
+
+    expected_host = urlparse(_normalize_url(target)).hostname or ""
+    if not expected_host or confirm_host.lower() != expected_host.lower():
+        flash(f"Type the exact hostname ({expected_host or 'unknown'}) to confirm -- it didn't match.")
+        return redirect(url_for("active_scan_form"))
+
+    log_active_scan_authorization(target, expected_host)
+    result = run_active_scan(target)
+    return render_template("active_scan_result.html", result=result)
+
+
+@app.route("/admin/active-scan/audit", methods=["GET"])
+@admin_required
+def active_scan_audit():
+    return render_template("active_scan_audit.html", entries=list_active_scan_audit())
 
 
 @app.errorhandler(429)
