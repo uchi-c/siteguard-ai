@@ -86,5 +86,7 @@ if __name__ == "__main__":
     try:
         print(json.dumps(discover(sys.argv[1])))
     except Exception:
+        import traceback
+        traceback.print_exc()
         print(json.dumps([]))
         sys.exit(1)

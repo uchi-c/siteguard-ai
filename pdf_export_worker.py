@@ -43,4 +43,6 @@ if __name__ == "__main__":
     try:
         render(sys.argv[1], sys.argv[2])
     except Exception:
+        import traceback
+        traceback.print_exc()
         sys.exit(1)

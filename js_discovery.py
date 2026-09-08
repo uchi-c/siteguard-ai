@@ -47,7 +47,12 @@ def discover_injection_points_js(base_url: str) -> list[dict]:
             capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
         )
         if proc.returncode != 0:
+            print(f"[js_discovery] worker failed (exit {proc.returncode}): "
+                  f"{proc.stderr[-4000:]}", file=sys.stderr)
             return []
         return json.loads(proc.stdout)
     except Exception:
+        print("[js_discovery] discover_injection_points_js failed:", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         return []

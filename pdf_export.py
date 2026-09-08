@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import traceback
 
 _WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pdf_export_worker.py")
 _SUBPROCESS_TIMEOUT = 30  # seconds -- a single static page render, should be fast
@@ -21,7 +22,9 @@ _SUBPROCESS_TIMEOUT = 30  # seconds -- a single static page render, should be fa
 
 def render_pdf(html: str) -> bytes | None:
     """Renders an HTML string to a PDF and returns its bytes, or None on
-    any failure."""
+    any failure. Failures are logged (not just swallowed) so a broken
+    Chromium install shows up in the app's logs instead of just silently
+    never working."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
             html_path = os.path.join(tmp, "report.html")
@@ -34,8 +37,12 @@ def render_pdf(html: str) -> bytes | None:
                 capture_output=True, timeout=_SUBPROCESS_TIMEOUT,
             )
             if proc.returncode != 0 or not os.path.exists(pdf_path):
+                print(f"[pdf_export] worker failed (exit {proc.returncode}): "
+                      f"{proc.stderr.decode('utf-8', 'replace')[-4000:]}", file=sys.stderr)
                 return None
             with open(pdf_path, "rb") as f:
                 return f.read()
     except Exception:
+        print("[pdf_export] render_pdf failed:", file=sys.stderr)
+        traceback.print_exc()
         return None
