@@ -32,9 +32,7 @@ RENDER_SETTLE_MS = 1500
 USER_AGENT = "SiteGuardAI-Scanner/1.0 (+active security test; JS-rendered discovery)"
 
 
-def discover(base_url: str) -> list[dict]:
-    from playwright.sync_api import sync_playwright
-
+def _extract_points(page, base_url: str) -> list[dict]:
     points: list[dict] = []
     seen = set()
 
@@ -44,6 +42,37 @@ def discover(base_url: str) -> list[dict]:
             seen.add(key)
             points.append({"url": url, "param": param})
 
+    for form in page.query_selector_all("form"):
+        method = (form.get_attribute("method") or "get").lower()
+        if method != "get":
+            continue  # skip POST forms -- don't submit unknown data to them
+        action = urljoin(base_url, form.get_attribute("action") or base_url)
+        for input_el in form.query_selector_all("input[name]"):
+            name = input_el.get_attribute("name")
+            if name:
+                add(action, name)
+
+    origin = urlparse(base_url).netloc
+    for a in page.query_selector_all("a[href*='?']"):
+        href = a.get_attribute("href")
+        if not href:
+            continue
+        link = urljoin(base_url, href)
+        parsed = urlparse(link)
+        if parsed.netloc != origin:
+            continue
+        if parsed.path.lower().endswith(STATIC_ASSET_EXTENSIONS):
+            continue
+        for param in parse_qs(parsed.query):
+            add(link, param)
+
+    return points
+
+
+def discover(base_url: str) -> list[dict]:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
@@ -52,34 +81,26 @@ def discover(base_url: str) -> list[dict]:
             page = browser.new_page(user_agent=USER_AGENT)
             page.goto(base_url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
             page.wait_for_timeout(RENDER_SETTLE_MS)
+            try:
+                # Some sites keep navigating after the initial load (a
+                # client-side redirect, an SPA router settling on its real
+                # route) -- give that a chance to finish before reading the
+                # DOM, or a mid-flight navigation destroys the execution
+                # context right as we try to query it.
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except PlaywrightError:
+                pass  # best-effort -- fine if it never goes fully idle
 
-            for form in page.query_selector_all("form"):
-                method = (form.get_attribute("method") or "get").lower()
-                if method != "get":
-                    continue  # skip POST forms -- don't submit unknown data to them
-                action = urljoin(base_url, form.get_attribute("action") or base_url)
-                for input_el in form.query_selector_all("input[name]"):
-                    name = input_el.get_attribute("name")
-                    if name:
-                        add(action, name)
-
-            origin = urlparse(base_url).netloc
-            for a in page.query_selector_all("a[href*='?']"):
-                href = a.get_attribute("href")
-                if not href:
-                    continue
-                link = urljoin(base_url, href)
-                parsed = urlparse(link)
-                if parsed.netloc != origin:
-                    continue
-                if parsed.path.lower().endswith(STATIC_ASSET_EXTENSIONS):
-                    continue
-                for param in parse_qs(parsed.query):
-                    add(link, param)
+            try:
+                return _extract_points(page, base_url)
+            except PlaywrightError:
+                # A navigation raced with the query above despite the wait
+                # -- the page has almost certainly settled by now, so one
+                # retry is worth it rather than giving up entirely.
+                page.wait_for_timeout(1000)
+                return _extract_points(page, base_url)
         finally:
             browser.close()
-
-    return points
 
 
 if __name__ == "__main__":
