@@ -121,3 +121,54 @@ def test_run_scan_spa_fallback_has_no_false_positive_exposures(spa_target_url, a
     assert result.reachable is True
     exposed = [f for f in result.findings if f.id.startswith("exposed-")]
     assert exposed == []
+
+
+# --- OWASP Top 10 mapping ---------------------------------------------------
+
+@pytest.mark.parametrize("finding_id,expected_category", [
+    ("hsts-missing", "A02"),
+    ("csp-missing", "A05"),
+    ("no-https", "A02"),
+    ("spf-missing", "A05"),
+    ("cookie-session", "A07"),
+    ("exposed-/.env", "A05"),
+    ("outdated-js-jQuery < 2.", "A06"),
+])
+def test_owasp_for_finding_id_maps_known_findings(finding_id, expected_category):
+    assert scanner._owasp_for_finding_id(finding_id) == expected_category
+
+
+def test_owasp_for_finding_id_unknown_returns_none():
+    assert scanner._owasp_for_finding_id("some-future-check-id") is None
+
+
+def test_scanresult_add_populates_owasp_fields():
+    result = ScanResult(target="x", scanned_at="t", findings=[], reachable=True, error=None)
+    result.add("hsts-missing", "Missing HSTS header", "high", "detail", "fix")
+    f = result.findings[0]
+    assert f.owasp == "A02:2021 - Cryptographic Failures"
+    assert f.owasp_url == "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
+
+
+def test_scanresult_add_leaves_owasp_blank_for_unmapped_finding():
+    result = ScanResult(target="x", scanned_at="t", findings=[], reachable=True, error=None)
+    result.add("totally-custom-id", "Something new", "low", "detail", "fix")
+    f = result.findings[0]
+    assert f.owasp == ""
+    assert f.owasp_url == ""
+
+
+# --- Passive WAF detection ---------------------------------------------------
+
+def test_run_scan_detects_cloudflare(cloudflare_target_url, allow_private):
+    result = scanner.run_scan(cloudflare_target_url)
+    assert result.reachable is True
+    waf_findings = [f for f in result.findings if f.id == "waf-detected"]
+    assert len(waf_findings) == 1
+    assert "Cloudflare" in waf_findings[0].title
+    assert waf_findings[0].severity == "info"  # must not affect the grade
+
+
+def test_run_scan_no_waf_finding_when_absent(test_target_url, allow_private):
+    result = scanner.run_scan(test_target_url)
+    assert all(f.id != "waf-detected" for f in result.findings)

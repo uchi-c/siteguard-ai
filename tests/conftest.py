@@ -62,6 +62,27 @@ def spa_target_url():
     srv.shutdown()
 
 
+@pytest.fixture(scope="session")
+def cloudflare_target_url():
+    """A local server that mimics Cloudflare's response fingerprint, for
+    testing passive WAF/CDN detection without hitting a real edge network."""
+    from flask import Flask, make_response
+
+    cf = Flask("cloudflare_test_target")
+
+    @cf.route("/")
+    def home():
+        resp = make_response("<html><body>behind cloudflare</body></html>")
+        resp.headers["CF-RAY"] = "8a1b2c3d4e5f6789-SJC"
+        resp.headers["Server"] = "cloudflare"
+        return resp
+
+    srv = _ServerThread(cf)
+    srv.start()
+    yield f"http://127.0.0.1:{srv.port}"
+    srv.shutdown()
+
+
 @pytest.fixture
 def allow_private(monkeypatch):
     """Lets the SSRF guard through for tests that deliberately scan 127.0.0.1."""

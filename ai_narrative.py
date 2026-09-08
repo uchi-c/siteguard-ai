@@ -35,7 +35,8 @@ the numbered action list."""
 def _findings_as_text(result: ScanResult) -> str:
     lines = []
     for f in result.findings:
-        lines.append(f"- [{f.severity.upper()}] {f.title}: {f.detail}")
+        owasp_note = f" [{f.owasp}]" if f.owasp else ""
+        lines.append(f"- [{f.severity.upper()}]{owasp_note} {f.title}: {f.detail}")
     return "\n".join(lines) if lines else "No issues found."
 
 

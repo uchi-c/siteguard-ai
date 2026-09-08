@@ -11,6 +11,14 @@ SPF/DMARC email-spoofing protection, mixed content, outdated JS libraries).
 The AI layer (Claude) turns raw findings into a report a non-technical
 business owner will actually read.
 
+Every finding is labeled with the **OWASP Top 10 (2021)** category it maps
+to, linked to OWASP's own page for that category -- SiteGuard's own
+classification (OWASP doesn't publish a finding-to-category lookup table),
+but grounded in the standard taxonomy rather than an invented one. The
+scanner also passively fingerprints known **WAF/CDN** services (Cloudflare,
+Akamai, Sucuri, Incapsula, CloudFront, Fastly) from the same response
+headers it already fetches -- informational only, doesn't affect the grade.
+
 The report page also doubles as an **outbound prospecting tool**: a "Draft
 an outreach message" button turns the scan's top finding into a short,
 copy-pasteable cold-outreach opener ("I ran a free security scan on

@@ -65,6 +65,68 @@ OUTDATED_JS_SIGNATURES = [
     (re.compile(r"bootstrap[-.](2\.|3\.[0-3])", re.I), "Bootstrap < 3.4 (known XSS issues)"),
 ]
 
+# OWASP Top 10 (2021) -- the current edition. Findings are mapped to the
+# category they're most conventionally associated with; this is SiteGuard's
+# own classification, not something OWASP publishes as a lookup table, so
+# treat it as "closest fit" rather than an official ruling.
+OWASP_TOP_10_2021 = {
+    "A01": ("A01:2021", "Broken Access Control", "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"),
+    "A02": ("A02:2021", "Cryptographic Failures", "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"),
+    "A03": ("A03:2021", "Injection", "https://owasp.org/Top10/A03_2021-Injection/"),
+    "A04": ("A04:2021", "Insecure Design", "https://owasp.org/Top10/A04_2021-Insecure_Design/"),
+    "A05": ("A05:2021", "Security Misconfiguration", "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"),
+    "A06": ("A06:2021", "Vulnerable and Outdated Components", "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"),
+    "A07": ("A07:2021", "Identification and Authentication Failures", "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/"),
+    "A08": ("A08:2021", "Software and Data Integrity Failures", "https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/"),
+    "A09": ("A09:2021", "Security Logging and Monitoring Failures", "https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/"),
+    "A10": ("A10:2021", "Server-Side Request Forgery (SSRF)", "https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_(SSRF)/"),
+}
+
+FINDING_OWASP_CATEGORY = {
+    "hsts-missing": "A02",
+    "csp-missing": "A05",
+    "xfo-missing": "A05",
+    "xcto-missing": "A05",
+    "referrer-missing": "A05",
+    "permissions-missing": "A05",
+    "server-banner": "A05",
+    "xpoweredby": "A05",
+    "tls-outdated": "A02",
+    "tls-expired": "A02",
+    "tls-expiring": "A02",
+    "tls-invalid": "A02",
+    "tls-unreachable": "A02",
+    "no-https": "A02",
+    "spf-missing": "A05",
+    "dmarc-missing": "A05",
+    "mixed-content": "A02",
+}
+
+
+def _owasp_for_finding_id(finding_id: str) -> str | None:
+    if finding_id in FINDING_OWASP_CATEGORY:
+        return FINDING_OWASP_CATEGORY[finding_id]
+    if finding_id.startswith("cookie-"):
+        return "A07"
+    if finding_id.startswith("exposed-"):
+        return "A05"
+    if finding_id.startswith("outdated-js-"):
+        return "A06"
+    return None
+
+
+# Passive WAF/CDN fingerprinting -- purely header-based, using the response
+# already fetched for the other checks. No extra requests, nothing sent
+# that a normal browser visit wouldn't already send.
+WAF_SIGNATURES = [
+    ("Cloudflare", ("cf-ray", "cf-cache-status"), ("cloudflare",)),
+    ("Sucuri", ("x-sucuri-id", "x-sucuri-cache"), ("sucuri",)),
+    ("Imperva / Incapsula", ("x-iinfo",), ("incapsula",)),
+    ("Akamai", ("x-akamai-transformed",), ("akamaighost", "akamai")),
+    ("Amazon CloudFront", ("x-amz-cf-id", "x-amz-cf-pop"), ("cloudfront",)),
+    ("Fastly", ("fastly-debug-digest",), ("fastly",)),
+]
+
 
 @dataclass
 class Finding:
@@ -73,6 +135,8 @@ class Finding:
     severity: str  # critical | high | medium | low | info
     detail: str
     recommendation: str
+    owasp: str = ""      # e.g. "A05:2021 - Security Misconfiguration"
+    owasp_url: str = ""
 
 
 @dataclass
@@ -84,7 +148,12 @@ class ScanResult:
     error: str | None = None
 
     def add(self, id, title, severity, detail, recommendation):
-        self.findings.append(Finding(id, title, severity, detail, recommendation))
+        category = _owasp_for_finding_id(id)
+        owasp_label, owasp_url = "", ""
+        if category:
+            code, name, url = OWASP_TOP_10_2021[category]
+            owasp_label, owasp_url = f"{code} - {name}", url
+        self.findings.append(Finding(id, title, severity, detail, recommendation, owasp_label, owasp_url))
 
     @property
     def score(self) -> int:
@@ -192,6 +261,22 @@ def _check_headers(resp: requests.Response, result: ScanResult):
                        f"Cookie set without {', '.join(m.title() for m in missing)} flag(s), "
                        f"increasing session-hijacking / XSS-theft risk.",
                        "Set Secure and HttpOnly (and SameSite=Lax/Strict) on all session cookies.")
+
+
+def _check_waf(resp: requests.Response, result: ScanResult):
+    headers = {k.lower(): v for k, v in resp.headers.items()}
+    server_header = headers.get("server", "").lower()
+    detected = [
+        name for name, header_keys, server_signatures in WAF_SIGNATURES
+        if any(k in headers for k in header_keys) or any(sig in server_header for sig in server_signatures)
+    ]
+    if detected:
+        result.add("waf-detected", f"WAF/CDN detected: {', '.join(detected)}", "info",
+                    "A web application firewall or CDN-based edge protection was detected via "
+                    "response headers. Informational only, not a vulnerability -- it can absorb "
+                    "some automated attack traffic, but isn't a substitute for fixing the issues "
+                    "above.",
+                    "No action needed. If this wasn't expected, verify the DNS/CDN setup is intentional.")
 
 
 def _check_tls(hostname: str, result: ScanResult):
@@ -347,6 +432,7 @@ def run_scan(target: str) -> ScanResult:
         return result
 
     _check_headers(resp, result)
+    _check_waf(resp, result)
     if url.startswith("https://"):
         _check_tls(hostname, result)
     else:
