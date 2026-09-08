@@ -19,25 +19,17 @@
     <div class="muted">Security score: {{ result.score }}/100</div>
 
     <div style="display:flex; gap:10px; justify-content:center; margin-top:20px; flex-wrap:wrap;">
-      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
-        <strong style="color:var(--critical);">{{ counts.critical }}</strong> critical
-      </span>
-      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
-        <strong style="color:var(--high);">{{ counts.high }}</strong> high
-      </span>
-      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
-        <strong style="color:var(--medium);">{{ counts.medium }}</strong> medium
-      </span>
-      <span style="background:var(--panel-2); border:1px solid var(--border); padding:6px 12px; border-radius:20px; font-size:13px;">
-        <strong style="color:var(--low);">{{ counts.low }}</strong> low
-      </span>
+      <span class="pill"><strong style="color:var(--critical);">{{ counts.critical }}</strong> critical</span>
+      <span class="pill"><strong style="color:var(--high);">{{ counts.high }}</strong> high</span>
+      <span class="pill"><strong style="color:var(--medium);">{{ counts.medium }}</strong> medium</span>
+      <span class="pill"><strong style="color:var(--low);">{{ counts.low }}</strong> low</span>
     </div>
 
     {% if scan_id %}
     <div class="muted" style="font-size:12.5px; margin-top:18px; word-break:break-all;">
       Shareable link: <a id="share-link-text" href="{{ request.host_url.rstrip('/') }}{{ url_for('view_report', scan_id=scan_id) }}">{{ request.host_url.rstrip('/') }}{{ url_for('view_report', scan_id=scan_id) }}</a>
-      <button type="button" id="share-copy"
-        style="width:auto; padding:4px 10px; font-size:12px; font-weight:600; margin-left:6px; background:var(--panel-2); color:var(--text); border:1px solid var(--border); border-radius:8px;">Copy link</button>
+      <button type="button" id="share-copy" class="btn-secondary"
+        style="width:auto; padding:4px 10px; font-size:12px; font-weight:600; margin-left:6px; border-radius:8px;">Copy link</button>
     </div>
     {% endif %}
   </div>
@@ -108,7 +100,7 @@
       <textarea id="outreach-text" readonly rows="5"
         style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-family:inherit; font-size:14px; resize:vertical; margin-top:16px;"></textarea>
       <div style="height:10px;"></div>
-      <button type="button" id="outreach-copy" class="btn" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border);">Copy to clipboard</button>
+      <button type="button" id="outreach-copy" class="btn btn-secondary">Copy to clipboard</button>
     </div>
   </div>
 

@@ -31,13 +31,18 @@
     <p class="muted" style="margin-top:16px;">{{ result.error }}</p>
     {% else %}
     <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
-      <div style="font-size:28px; font-weight:800;">{{ result.label }}</div>
+      <div style="font-size:28px; font-weight:800; color: {{ 'var(--accent)' if result.label == 'benign' else 'var(--critical)' }};">{{ result.label }}</div>
       <div class="muted">{{ (result.confidence * 100)|round(1) }}% confidence</div>
-      <div style="height:12px;"></div>
+      <div style="height:18px;"></div>
       {% for label, score in result.scores.items() %}
-      <div style="display:flex; justify-content:space-between; font-size:13px; padding:3px 0;">
-        <span class="muted">{{ label }}</span>
-        <span>{{ (score * 100)|round(1) }}%</span>
+      <div style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:4px;">
+          <span class="muted">{{ label }}</span>
+          <span class="muted">{{ (score * 100)|round(1) }}%</span>
+        </div>
+        <div style="background:var(--bg); border-radius:6px; height:6px; overflow:hidden;">
+          <div style="width:{{ (score * 100)|round(1) }}%; height:100%; background: {{ 'var(--accent)' if label == 'benign' else 'var(--critical)' }};"></div>
+        </div>
       </div>
       {% endfor %}
     </div>

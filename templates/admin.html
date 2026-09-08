@@ -6,7 +6,7 @@
   <h2 style="margin:0;">Admin</h2>
   <form method="post" action="{{ url_for('admin_logout') }}" style="width:auto;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" style="width:auto; padding:8px 14px; font-size:13px; background:var(--panel-2); color:var(--text); border:1px solid var(--border);">Log out</button>
+    <button type="submit" class="btn-secondary btn-sm">Log out</button>
   </form>
 </div>
 
@@ -38,7 +38,7 @@
     injection / XSS / command injection / path traversal / SSTI). Local
     inference only -- no network calls to any target.
   </p>
-  <a href="{{ url_for('classify_form') }}" class="btn" style="display:inline-block; text-decoration:none; text-align:center; background:var(--panel-2); color:var(--text); border:1px solid var(--border);">Classify a payload</a>
+  <a href="{{ url_for('classify_form') }}" class="btn btn-secondary" style="display:inline-block; text-decoration:none; text-align:center;">Classify a payload</a>
 </div>
 
 <div style="height:20px;"></div>
@@ -46,25 +46,19 @@
 <div class="card">
   <h3 style="margin-top:0;">Leads ({{ leads|length }})</h3>
   {% if leads %}
-  <div style="overflow-x:auto;">
-    <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
+  <div class="table-wrap">
+    <table class="data-table">
       <thead>
-        <tr style="text-align:left; border-bottom:1px solid var(--border);">
-          <th style="padding:8px 6px;">When (UTC)</th>
-          <th style="padding:8px 6px;">Email</th>
-          <th style="padding:8px 6px;">Site</th>
-          <th style="padding:8px 6px;">Grade</th>
-          <th style="padding:8px 6px;">Score</th>
-        </tr>
+        <tr><th>When (UTC)</th><th>Email</th><th>Site</th><th>Grade</th><th>Score</th></tr>
       </thead>
       <tbody>
         {% for lead in leads %}
-        <tr style="border-bottom:1px solid var(--border);">
-          <td class="muted" style="padding:8px 6px; white-space:nowrap;">{{ lead.timestamp_utc[:16].replace('T', ' ') }}</td>
-          <td style="padding:8px 6px; word-break:break-all;">{{ lead.email }}</td>
-          <td style="padding:8px 6px; word-break:break-all;">{{ lead.target }}</td>
-          <td style="padding:8px 6px;">{{ lead.grade }}</td>
-          <td style="padding:8px 6px;">{{ lead.score }}</td>
+        <tr>
+          <td class="muted" style="white-space:nowrap;">{{ lead.timestamp_utc[:16].replace('T', ' ') }}</td>
+          <td style="word-break:break-all;">{{ lead.email }}</td>
+          <td style="word-break:break-all;">{{ lead.target }}</td>
+          <td>{{ lead.grade }}</td>
+          <td>{{ lead.score }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -80,25 +74,19 @@
 <div class="card">
   <h3 style="margin-top:0;">Recent scans ({{ scans|length }})</h3>
   {% if scans %}
-  <div style="overflow-x:auto;">
-    <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
+  <div class="table-wrap">
+    <table class="data-table">
       <thead>
-        <tr style="text-align:left; border-bottom:1px solid var(--border);">
-          <th style="padding:8px 6px;">When (UTC)</th>
-          <th style="padding:8px 6px;">Site</th>
-          <th style="padding:8px 6px;">Grade</th>
-          <th style="padding:8px 6px;">Score</th>
-          <th style="padding:8px 6px;">Report</th>
-        </tr>
+        <tr><th>When (UTC)</th><th>Site</th><th>Grade</th><th>Score</th><th>Report</th></tr>
       </thead>
       <tbody>
         {% for s in scans %}
-        <tr style="border-bottom:1px solid var(--border);">
-          <td class="muted" style="padding:8px 6px; white-space:nowrap;">{{ s.created_at[:16].replace('T', ' ') }}</td>
-          <td style="padding:8px 6px; word-break:break-all;">{{ s.target }}</td>
-          <td style="padding:8px 6px;">{{ s.grade }}</td>
-          <td style="padding:8px 6px;">{{ s.score }}</td>
-          <td style="padding:8px 6px;"><a href="{{ url_for('view_report', scan_id=s.id) }}">View &rarr;</a></td>
+        <tr>
+          <td class="muted" style="white-space:nowrap;">{{ s.created_at[:16].replace('T', ' ') }}</td>
+          <td style="word-break:break-all;">{{ s.target }}</td>
+          <td>{{ s.grade }}</td>
+          <td>{{ s.score }}</td>
+          <td><a href="{{ url_for('view_report', scan_id=s.id) }}">View &rarr;</a></td>
         </tr>
         {% endfor %}
       </tbody>

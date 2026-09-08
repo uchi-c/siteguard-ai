@@ -5,21 +5,17 @@
   <h2 style="margin-top:0;">Authorization log ({{ entries|length }})</h2>
   <p class="muted" style="font-size:13px;">Every confirmed active-scan run, most recent first.</p>
   {% if entries %}
-  <div style="overflow-x:auto;">
-    <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
+  <div class="table-wrap">
+    <table class="data-table">
       <thead>
-        <tr style="text-align:left; border-bottom:1px solid var(--border);">
-          <th style="padding:8px 6px;">When (UTC)</th>
-          <th style="padding:8px 6px;">Target</th>
-          <th style="padding:8px 6px;">Confirmed hostname</th>
-        </tr>
+        <tr><th>When (UTC)</th><th>Target</th><th>Confirmed hostname</th></tr>
       </thead>
       <tbody>
         {% for e in entries %}
-        <tr style="border-bottom:1px solid var(--border);">
-          <td class="muted" style="padding:8px 6px; white-space:nowrap;">{{ e.created_at[:16].replace('T', ' ') }}</td>
-          <td style="padding:8px 6px; word-break:break-all;">{{ e.target }}</td>
-          <td style="padding:8px 6px; word-break:break-all;">{{ e.hostname }}</td>
+        <tr>
+          <td class="muted" style="white-space:nowrap;">{{ e.created_at[:16].replace('T', ' ') }}</td>
+          <td style="word-break:break-all;">{{ e.target }}</td>
+          <td style="word-break:break-all;">{{ e.hostname }}</td>
         </tr>
         {% endfor %}
       </tbody>
