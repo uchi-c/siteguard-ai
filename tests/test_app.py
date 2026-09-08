@@ -150,7 +150,7 @@ def test_active_scan_start_requires_authorization_checkbox(client, monkeypatch):
     assert b"confirm you" in resp.data
 
 
-def test_active_scan_start_logs_authorization_and_runs(client, monkeypatch):
+def test_active_scan_start_logs_authorization_and_starts_a_job(client, monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
     monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", True)
 
@@ -158,18 +158,55 @@ def test_active_scan_start_logs_authorization_and_runs(client, monkeypatch):
     monkeypatch.setattr(app_module, "log_active_scan_authorization",
                          lambda target, hostname: logged.update(target=target, hostname=hostname))
 
-    from active_scan import ActiveScanResult
-    monkeypatch.setattr(app_module, "run_active_scan",
-                         lambda target: ActiveScanResult(target=target, scanned_at="t", findings=[]))
-
+    # The scan itself now runs on a background thread (see active_scan_job.py
+    # -- necessary once scans could take minutes and exceed gunicorn's
+    # worker timeout), so this only checks that authorization is logged and
+    # the request redirects straight to the polling status page without
+    # waiting on the scan.
     client.post("/admin/login", data={"password": "correct-horse"})
     resp = client.post("/admin/active-scan", data={
         "target": "https://example.test", "confirm_host": "example.test", "authorized": "on",
-    }, follow_redirects=True)
+    })
 
-    assert resp.status_code == 200
+    assert resp.status_code == 302
+    assert "/admin/active-scan/" in resp.headers["Location"]
     assert logged == {"target": "https://example.test", "hostname": "example.test"}
-    assert b"No issues found by these checks." in resp.data
+
+
+def test_active_scan_status_unknown_job_flashes_and_redirects(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.get("/admin/active-scan/no-such-job", follow_redirects=True)
+    assert b"doesn&#39;t exist or has expired" in resp.data or b"doesn't exist or has expired" in resp.data
+
+
+def test_active_scan_status_json_requires_admin_login(client):
+    resp = client.get("/admin/active-scan/some-job/status")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_active_scan_status_json_unknown_job_404s(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.get("/admin/active-scan/no-such-job/status")
+    assert resp.status_code == 404
+
+
+def test_active_scan_status_json_reflects_finished_job(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    import active_scan_job
+    active_scan_job.create_job("job-abc", "https://example.test")
+    active_scan_job._jobs["job-abc"]["finished"] = True
+    active_scan_job._jobs["job-abc"]["result"] = {
+        "target": "https://example.test", "scanned_at": "t",
+        "injection_points_tested": 0, "error": None, "findings": [],
+    }
+
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.get("/admin/active-scan/job-abc/status")
+    assert resp.status_code == 200
+    assert resp.get_json()["finished"] is True
 
 
 def test_active_scan_audit_requires_admin_login(client):

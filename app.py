@@ -38,7 +38,7 @@ from storage import (
     log_active_scan_authorization, list_active_scan_audit,
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
-from active_scan import run_active_scan
+import active_scan_job
 import payload_classifier
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
@@ -282,8 +282,31 @@ def active_scan_start():
         return redirect(url_for("active_scan_form"))
 
     log_active_scan_authorization(target, expected_host)
-    result = run_active_scan(target)
-    return render_template("active_scan_result.html", result=result)
+
+    job_id = secrets.token_urlsafe(8)
+    active_scan_job.create_job(job_id, target)
+    threading.Thread(target=active_scan_job.run_job, args=(job_id, target), daemon=True).start()
+
+    return redirect(url_for("active_scan_status", job_id=job_id))
+
+
+@app.route("/admin/active-scan/<job_id>", methods=["GET"])
+@admin_required
+def active_scan_status(job_id):
+    job = active_scan_job.get_job(job_id)
+    if not job:
+        flash("That active-scan job doesn't exist or has expired.")
+        return redirect(url_for("active_scan_form"))
+    return render_template("active_scan_status.html", job=job, job_id=job_id)
+
+
+@app.route("/admin/active-scan/<job_id>/status", methods=["GET"])
+@admin_required
+def active_scan_status_json(job_id):
+    job = active_scan_job.get_job(job_id)
+    if not job:
+        return {"error": "not found"}, 404
+    return job
 
 
 @app.route("/admin/active-scan/audit", methods=["GET"])

@@ -87,9 +87,10 @@ def cloudflare_target_url():
 def vulnerable_target_url():
     """A deliberately vulnerable local app, used ONLY to validate
     active_scan.py's detection logic in a controlled, offline setting --
-    reflected XSS on two params, error-based SQLi on one, and a login form
-    that accepts one specific weak credential pair. No external network
-    involved, matches the pattern already used by test_target.py."""
+    reflected XSS, error-based SQLi, SSTI, path traversal, OS command
+    injection, open redirect, and a login form that accepts one specific
+    weak credential pair. No external network involved, matches the
+    pattern already used by test_target.py."""
     from flask import Flask, redirect, request as flask_request
 
     vuln = Flask("vulnerable_test_target")
@@ -100,6 +101,10 @@ def vulnerable_target_url():
         return (f'<html><body>'
                 f'<a href="/?q=test">self link</a>'
                 f'<form method="get" action="/search"><input name="term"></form>'
+                f'<form method="get" action="/render"><input name="tpl"></form>'
+                f'<form method="get" action="/file"><input name="path"></form>'
+                f'<form method="get" action="/run"><input name="cmd"></form>'
+                f'<form method="get" action="/go"><input name="redirect"></form>'
                 f'Results: {q}'
                 f'</body></html>')
 
@@ -109,6 +114,46 @@ def vulnerable_target_url():
         if "'" in term:
             return "Error: you have an error in your SQL syntax near...", 500
         return f"<html><body>Search results for: {term}</body></html>"
+
+    @vuln.route("/render")
+    def render_route():
+        """Simulates a template engine evaluating user input -- only
+        reflects the evaluated *result*, never the raw input, so this
+        can't accidentally also trigger the reflected-XSS check."""
+        tpl = flask_request.args.get("tpl", "")
+        if tpl in ("{{7*7}}", "${7*7}"):
+            return "<html><body>Result: 49</body></html>"
+        return "<html><body>Result: (n/a)</body></html>"
+
+    @vuln.route("/file")
+    def file_route():
+        """Simulates a path-traversal-vulnerable file reader -- only
+        returns canned file content, never reflects the raw path."""
+        path = flask_request.args.get("path", "")
+        normalized = path.replace("\\", "/").lower()
+        if "etc/passwd" in normalized:
+            return "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1::/usr/sbin:/usr/sbin/nologin\n"
+        if "win.ini" in normalized:
+            return "[extensions]\n[fonts]\n"
+        return "File not found", 404
+
+    @vuln.route("/run")
+    def run_route():
+        """Simulates OS command injection via string concatenation into a
+        shell call -- only echoes back the marker after a real shell
+        metacharacter + 'echo', matching the four payload templates."""
+        cmd = flask_request.args.get("cmd", "")
+        if "echo " in cmd and any(sep in cmd for sep in (";", "|", "`", "$(")):
+            marker = cmd.split("echo ", 1)[1].rstrip("`) ")
+            return f"<html><body>Output: {marker}</body></html>"
+        return "<html><body>Output: command not found</body></html>"
+
+    @vuln.route("/go")
+    def go_route():
+        """Simulates an unvalidated redirect -- sends the visitor wherever
+        the param says, no allow-list check."""
+        target = flask_request.args.get("redirect", "/")
+        return redirect(target, code=302)
 
     @vuln.route("/admin", methods=["GET"])
     def admin_login_page():
@@ -126,6 +171,32 @@ def vulnerable_target_url():
     srv.start()
     yield f"http://127.0.0.1:{srv.port}"
     srv.shutdown()
+
+
+@pytest.fixture(scope="session")
+def vulnerable_scan_result(vulnerable_target_url):
+    """Runs the full active scan against vulnerable_target_url exactly
+    once for the whole session -- with 6 checks per discovered point, a
+    full scan takes real wall-clock time, and most tests just want to
+    assert on one specific finding, not re-run the whole thing each time.
+
+    ALLOW_PRIVATE_TARGETS is patched directly (the allow_private fixture
+    is function-scoped and can't be used from a session-scoped fixture),
+    but the mutation window is closed BEFORE yielding: run the scan, then
+    restore the flag, then yield the already-computed result. A
+    session-scoped fixture's generator stays paused at its yield for the
+    rest of the session, so restoring only *after* yield would leave
+    ALLOW_PRIVATE_TARGETS=True leaking into every other test that runs
+    afterward (this happened -- it broke the unrelated SSRF tests)."""
+    import scanner
+    import active_scan
+    original = scanner.ALLOW_PRIVATE_TARGETS
+    scanner.ALLOW_PRIVATE_TARGETS = True
+    try:
+        result = active_scan.run_active_scan(vulnerable_target_url)
+    finally:
+        scanner.ALLOW_PRIVATE_TARGETS = original
+    yield result
 
 
 @pytest.fixture(scope="session")

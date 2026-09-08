@@ -26,29 +26,59 @@ def test_discover_injection_points_finds_link_and_form_params(vulnerable_target_
     assert "term" in params
 
 
-def test_run_active_scan_detects_reflected_xss(vulnerable_target_url, allow_private):
-    result = active_scan.run_active_scan(vulnerable_target_url)
-    xss = [f for f in result.findings if f.check == "reflected-xss"]
+def test_run_active_scan_detects_reflected_xss(vulnerable_scan_result):
+    xss = [f for f in vulnerable_scan_result.findings if f.check == "reflected-xss"]
     assert any("'q'" in f.title for f in xss) or any("q" in f.location for f in xss)
 
 
-def test_run_active_scan_detects_sqli(vulnerable_target_url, allow_private):
-    result = active_scan.run_active_scan(vulnerable_target_url)
-    sqli = [f for f in result.findings if f.check == "sqli-error-based"]
+def test_run_active_scan_detects_sqli(vulnerable_scan_result):
+    sqli = [f for f in vulnerable_scan_result.findings if f.check == "sqli-error-based"]
     assert len(sqli) >= 1
     assert sqli[0].severity == "critical"
 
 
-def test_run_active_scan_detects_weak_credentials(vulnerable_target_url, allow_private):
-    result = active_scan.run_active_scan(vulnerable_target_url)
-    weak = [f for f in result.findings if f.check == "weak-credentials"]
+def test_run_active_scan_detects_weak_credentials(vulnerable_scan_result):
+    weak = [f for f in vulnerable_scan_result.findings if f.check == "weak-credentials"]
     assert len(weak) == 1
     assert "admin" in weak[0].detail
 
 
+def test_run_active_scan_detects_ssti(vulnerable_scan_result):
+    ssti = [f for f in vulnerable_scan_result.findings if f.check == "ssti"]
+    assert len(ssti) >= 1
+    assert ssti[0].severity == "critical"
+    assert "tpl" in ssti[0].title
+
+
+def test_run_active_scan_detects_path_traversal(vulnerable_scan_result):
+    traversal = [f for f in vulnerable_scan_result.findings if f.check == "path-traversal"]
+    assert len(traversal) == 1
+    assert "path" in traversal[0].title
+
+
+def test_run_active_scan_detects_command_injection(vulnerable_scan_result):
+    cmdi = [f for f in vulnerable_scan_result.findings if f.check == "command-injection"]
+    assert len(cmdi) == 1
+    assert "cmd" in cmdi[0].title
+
+
+def test_run_active_scan_detects_open_redirect(vulnerable_scan_result):
+    redirects = [f for f in vulnerable_scan_result.findings if f.check == "open-redirect"]
+    assert len(redirects) == 1
+    assert "redirect" in redirects[0].title
+    assert redirects[0].severity == "medium"
+
+
+def test_open_redirect_only_tested_on_redirect_looking_params():
+    """A param named 'q' shouldn't even trigger a probe -- avoids wasting
+    a request on params that were never going to be a redirect target."""
+    result = active_scan._test_open_redirect({"url": "http://x.test/", "param": "q"})
+    assert result is None
+
+
 def test_run_active_scan_no_findings_against_a_clean_target(test_target_url, allow_private):
     """test_target.py has no query-string params, no GET forms, and no
-    /admin route -- none of the three active checks should fire."""
+    /admin route -- none of the active checks should fire."""
     result = active_scan.run_active_scan(test_target_url)
     assert result.findings == []
 

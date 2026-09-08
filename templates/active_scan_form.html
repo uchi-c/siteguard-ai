@@ -4,14 +4,18 @@
 <div class="card" style="border-color: var(--critical);">
   <h2 style="margin-top:0; color: var(--critical);">Active vulnerability testing</h2>
   <p class="muted" style="font-size:14px;">
-    This sends real, non-destructive detection probes to the target: a
-    reflected-XSS marker, an error-based SQLi probe, and up to
-    {{ 3 }} well-known default-credential attempts against any login form
-    found. Unlike the passive scanner, this is <strong>not</strong>
-    something you can legally run against a site you don't have explicit
-    authorization to test &mdash; unauthorized use is a criminal offense in
-    most jurisdictions (e.g. the US Computer Fraud and Abuse Act),
-    regardless of intent. Every run here is logged.
+    This sends real, non-destructive detection probes to the target:
+    reflected XSS, error-based SQL injection, server-side template
+    injection, path traversal, OS command injection (a harmless
+    <code>echo</code> only -- never a destructive or data-reading
+    command), open redirect, and up to 3 well-known default-credential
+    attempts against any login form found. Unlike the passive scanner,
+    this is <strong>not</strong> something you can legally run against a
+    site you don't have explicit authorization to test &mdash;
+    unauthorized use is a criminal offense in most jurisdictions (e.g.
+    the US Computer Fraud and Abuse Act), regardless of intent. Every run
+    here is logged. Runs in the background and can take a few minutes on
+    a busy page &mdash; you'll land on a status page that updates itself.
   </p>
   <form action="{{ url_for('active_scan_start') }}" method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

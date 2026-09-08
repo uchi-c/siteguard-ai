@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Active scan progress{% endblock %}
+{% block content %}
+<div class="card" id="active-scan-card" style="border-color: var(--critical);">
+  <h2 style="margin-top:0;">Active scan: {{ job.target }}</h2>
+  <p class="muted" id="active-scan-progress-text" style="font-size:14px;">
+    {% if job.finished %}Done.{% else %}Running -- this can take a few minutes for a busy page (up to 6 checks per discovered input)&hellip;{% endif %}
+  </p>
+  <div id="active-scan-results">
+    {% if job.finished %}
+      {% if job.result.error %}
+      <p class="muted">{{ job.result.error }}</p>
+      {% else %}
+      <p class="muted" style="font-size:14px;">Tested {{ job.result.injection_points_tested }} injection point(s).</p>
+      {% if job.result.findings %}
+        {% for f in job.result.findings %}
+        <div style="padding:12px 0; border-top:1px solid var(--border);">
+          <div style="display:flex; justify-content:space-between; gap:12px;">
+            <strong style="font-size:14.5px;">{{ f.title }}</strong>
+            <span style="font-size:11px; text-transform:uppercase; font-weight:700; white-space:nowrap;
+              color: var(--{{ f.severity }});">{{ f.severity }}</span>
+          </div>
+          <p class="muted" style="font-size:12.5px; margin:4px 0 0; word-break:break-all;">
+            {{ f.check }} &middot; {{ f.location }}
+          </p>
+          <p class="muted" style="font-size:13.5px; margin:6px 0 0;">{{ f.detail }}</p>
+        </div>
+        {% endfor %}
+        {% if job.result.findings|selectattr("check", "equalto", "weak-credentials")|list %}
+        <p class="muted" style="font-size:12.5px; margin-top:14px;">
+          Note: the weak-credentials check uses a heuristic (redirect away from
+          the login page, no "invalid" wording) to guess success, which isn't
+          fully reliable &mdash; confirm manually before reporting it as
+          confirmed.
+        </p>
+        {% endif %}
+      {% else %}
+      <p class="muted">No issues found by these checks.</p>
+      {% endif %}
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('active_scan_form') }}">&larr; Run another</a></p>
+
+<script>
+  var jobId = {{ job_id | tojson }};
+  var finished = {{ 'true' if job.finished else 'false' }};
+
+  function severityColor(sev) { return 'var(--' + sev + ')'; }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function renderResult(result) {
+    var el = document.getElementById('active-scan-results');
+    if (result.error) {
+      el.innerHTML = '<p class="muted"></p>';
+      el.querySelector('p').textContent = result.error;
+      return;
+    }
+    var html = '<p class="muted" style="font-size:14px;">Tested ' +
+      result.injection_points_tested + ' injection point(s).</p>';
+    if (result.findings.length === 0) {
+      html += '<p class="muted">No issues found by these checks.</p>';
+    } else {
+      var hasWeakCreds = false;
+      result.findings.forEach(function (f) {
+        if (f.check === 'weak-credentials') hasWeakCreds = true;
+        html += '<div style="padding:12px 0; border-top:1px solid var(--border);">' +
+          '<div style="display:flex; justify-content:space-between; gap:12px;">' +
+          '<strong style="font-size:14.5px;">' + escapeHtml(f.title) + '</strong>' +
+          '<span style="font-size:11px; text-transform:uppercase; font-weight:700; white-space:nowrap; color:' +
+          severityColor(f.severity) + ';">' + escapeHtml(f.severity) + '</span></div>' +
+          '<p class="muted" style="font-size:12.5px; margin:4px 0 0; word-break:break-all;">' +
+          escapeHtml(f.check) + ' &middot; ' + escapeHtml(f.location) + '</p>' +
+          '<p class="muted" style="font-size:13.5px; margin:6px 0 0;">' + escapeHtml(f.detail) + '</p></div>';
+      });
+      if (hasWeakCreds) {
+        html += '<p class="muted" style="font-size:12.5px; margin-top:14px;">' +
+          'Note: the weak-credentials check uses a heuristic (redirect away from ' +
+          'the login page, no &quot;invalid&quot; wording) to guess success, which ' +
+          "isn't fully reliable &mdash; confirm manually before reporting it as confirmed.</p>";
+      }
+    }
+    el.innerHTML = html;
+  }
+
+  function poll() {
+    fetch('/admin/active-scan/' + jobId + '/status')
+      .then(function (r) { return r.json(); })
+      .then(function (job) {
+        if (job.finished) {
+          document.getElementById('active-scan-progress-text').textContent = 'Done.';
+          renderResult(job.result);
+        } else {
+          setTimeout(poll, 4000);
+        }
+      })
+      .catch(function () {
+        setTimeout(poll, 5000);
+      });
+  }
+
+  if (!finished) {
+    setTimeout(poll, 4000);
+  }
+</script>
+{% endblock %}

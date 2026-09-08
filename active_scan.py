@@ -1,9 +1,14 @@
 """
 Active vulnerability DETECTION probes -- reflected XSS, error-based SQLi,
-and a tiny fixed-list weak-credential check. This is NOT an exploitation
-framework: nothing here extracts, modifies, or exfiltrates data. Payloads
-are harmless markers/probes designed only to confirm a vulnerability class
-exists, the same way a professional DAST tool's detection phase works.
+SSTI, path traversal, OS command injection, open redirect, and a tiny
+fixed-list weak-credential check. This is NOT an exploitation framework:
+nothing here extracts, modifies, or exfiltrates data beyond the minimum
+needed to confirm each vulnerability class exists (e.g. traversal reads
+/etc/passwd or win.ini -- standard, non-sensitive confirmation files, never
+/etc/shadow or anything requiring elevated access; command injection only
+ever runs a harmless `echo <marker>`, never a destructive or data-reading
+command). Same detection-only philosophy a professional DAST tool's scan
+phase uses.
 
 This is fundamentally different from scanner.py's passive checks and is
 gated hard, at multiple independent layers (see app.py):
@@ -48,6 +53,28 @@ SQL_ERROR_SIGNATURES = [
     "quoted string not properly terminated",
 ]
 
+# (payload, expected-evaluated-result) -- classic universal SSTI probes.
+# Math, not a real command: if a template engine evaluates it, "49" shows
+# up in the response where it otherwise wouldn't.
+SSTI_PROBES = [
+    ("{{7*7}}", "49"),   # Jinja2/Twig-style
+    ("${7*7}", "49"),    # Freemarker/EL-style
+]
+
+TRAVERSAL_PROBES = [
+    "../../../../../../../../etc/passwd",
+    "..\\..\\..\\..\\..\\..\\windows\\win.ini",
+]
+
+OPEN_REDIRECT_PARAM_HINTS = ("redirect", "url", "next", "return", "continue", "dest", "target")
+# .invalid is IANA-reserved to never resolve (RFC 2606) -- confirms the
+# redirect target without ever actually contacting anything.
+OPEN_REDIRECT_TEST_HOST = "siteguard-redirect-probe.invalid"
+
+# "echo <marker>" only -- confirms command execution without touching the
+# filesystem, network, or anything else on the target.
+CMDI_PAYLOAD_TEMPLATES = ["; echo {marker}", "| echo {marker}", "`echo {marker}`", "$(echo {marker})"]
+
 # Deliberately tiny -- a spot-check for egregiously weak defaults, not a
 # wordlist attack. The cap is enforced in code, not just by list length.
 WEAK_CREDENTIALS = [
@@ -61,7 +88,9 @@ LOGIN_PATHS = ["/admin", "/login", "/wp-login.php", "/admin/login", "/administra
 
 @dataclass
 class ActiveFinding:
-    check: str          # "reflected-xss" | "sqli-error-based" | "weak-credentials"
+    check: str          # "reflected-xss" | "sqli-error-based" | "ssti" |
+                         # "path-traversal" | "command-injection" |
+                         # "open-redirect" | "weak-credentials"
     severity: str
     title: str
     detail: str
@@ -196,6 +225,105 @@ def _test_sqli(point: dict) -> ActiveFinding | None:
     return None
 
 
+def _test_ssti(point: dict) -> ActiveFinding | None:
+    for payload, expected in SSTI_PROBES:
+        baseline_url = _with_param(point["url"], point["param"], "sgaibaseline1")
+        probe_url = _with_param(point["url"], point["param"], payload)
+        try:
+            baseline = requests.get(baseline_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+            time.sleep(0.1)
+            probe = requests.get(probe_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+        except requests.RequestException:
+            continue
+        if expected in probe.text and expected not in baseline.text:
+            return ActiveFinding(
+                check="ssti", severity="critical",
+                title=f"Possible server-side template injection in parameter '{point['param']}'",
+                detail=(f"Injecting '{payload}' into '{point['param']}' caused the "
+                         f"evaluated result ('{expected}') to appear in the response -- "
+                         f"absent with a plain value -- suggesting the input is passed "
+                         f"into a template engine and evaluated. Often escalates to full "
+                         f"remote code execution."),
+                location=probe_url,
+            )
+    return None
+
+
+def _test_traversal(point: dict) -> ActiveFinding | None:
+    for payload in TRAVERSAL_PROBES:
+        test_url = _with_param(point["url"], point["param"], payload)
+        try:
+            r = requests.get(test_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+        except requests.RequestException:
+            continue
+        text = r.text
+        if ("root:" in text and ":0:0:" in text) or "[extensions]" in text:
+            return ActiveFinding(
+                check="path-traversal", severity="critical",
+                title=f"Possible path traversal in parameter '{point['param']}'",
+                detail=(f"Injecting '{payload}' into '{point['param']}' returned what "
+                         f"looks like the contents of a system file, suggesting the "
+                         f"parameter is used to read files from disk without validating "
+                         f"the path. Can expose configuration, source code, or "
+                         f"credentials stored elsewhere on the server."),
+                location=test_url,
+            )
+    return None
+
+
+def _test_command_injection(point: dict) -> ActiveFinding | None:
+    marker = f"sgaicmdi{secrets.token_hex(4)}"
+    for template in CMDI_PAYLOAD_TEMPLATES:
+        payload = template.format(marker=marker)
+        test_url = _with_param(point["url"], point["param"], payload)
+        try:
+            r = requests.get(test_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+        except requests.RequestException:
+            continue
+        # Any endpoint that reflects its input verbatim (a "you searched
+        # for X" message, a redirect's fallback link) will contain the
+        # marker too, since the marker is embedded in the raw payload --
+        # that's not evidence of execution. Only count it when the marker
+        # appears WITHOUT the full raw payload also being present, which
+        # is what "a shell actually ran echo and returned just its
+        # output" looks like, as opposed to plain reflection.
+        if marker in r.text and payload not in r.text:
+            return ActiveFinding(
+                check="command-injection", severity="critical",
+                title=f"Possible OS command injection in parameter '{point['param']}'",
+                detail=(f"Injecting a shell metacharacter sequence into '{point['param']}' "
+                         f"caused an injected 'echo' command's output to appear in the "
+                         f"response, suggesting the input reaches a shell command "
+                         f"unsanitized. Typically a full remote-code-execution vulnerability."),
+                location=test_url,
+            )
+        time.sleep(0.1)
+    return None
+
+
+def _test_open_redirect(point: dict) -> ActiveFinding | None:
+    if not any(hint in point["param"].lower() for hint in OPEN_REDIRECT_PARAM_HINTS):
+        return None  # only worth testing params that look like they control a redirect
+    probe_target = f"https://{OPEN_REDIRECT_TEST_HOST}/"
+    test_url = _with_param(point["url"], point["param"], probe_target)
+    try:
+        r = requests.get(test_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, allow_redirects=False)
+    except requests.RequestException:
+        return None
+    location = r.headers.get("Location", "")
+    if r.status_code in (301, 302, 303, 307, 308) and OPEN_REDIRECT_TEST_HOST in location:
+        return ActiveFinding(
+            check="open-redirect", severity="medium",
+            title=f"Possible open redirect via parameter '{point['param']}'",
+            detail=(f"Setting '{point['param']}' to an external URL made the server "
+                     f"redirect there directly, without validating it's an internal or "
+                     f"allow-listed destination. Commonly abused for phishing -- a link "
+                     f"on your real domain that silently sends visitors elsewhere."),
+            location=test_url,
+        )
+    return None
+
+
 def _guess_field(form_html: str, candidates: list[str]) -> str | None:
     names = re.findall(r'<input\b[^>]*name=["\']([^"\']+)["\']', form_html, re.I)
     for name in names:
@@ -268,15 +396,20 @@ def run_active_scan(target: str) -> ActiveScanResult:
     points = _discover_injection_points(url)
     result.injection_points_tested = len(points)
 
+    checks = [
+        _test_reflected_xss,
+        _test_sqli,
+        _test_ssti,
+        _test_traversal,
+        _test_command_injection,
+        _test_open_redirect,
+    ]
     for point in points:
-        xss = _test_reflected_xss(point)
-        if xss:
-            result.findings.append(xss)
-        time.sleep(0.1)
-        sqli = _test_sqli(point)
-        if sqli:
-            result.findings.append(sqli)
-        time.sleep(0.1)
+        for check in checks:
+            finding = check(point)
+            if finding:
+                result.findings.append(finding)
+            time.sleep(0.1)
 
     result.findings.extend(_test_weak_credentials(url))
 

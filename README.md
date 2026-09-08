@@ -44,12 +44,30 @@ outright) until you do.
 
 Everything above is passive (a normal browser visit generates the same
 traffic). This is not: it's a **gated, admin-only mode** that sends real,
-non-destructive *detection* probes — a reflected-XSS marker, an error-based
-SQLi probe, and up to 3 well-known default-credential attempts against any
-login form found. It does not extract, modify, or exfiltrate anything, but
-it is still active testing, and **running it against a site you don't have
-explicit authorization to test is a criminal offense in most jurisdictions**
-(e.g. the US Computer Fraud and Abuse Act), regardless of intent.
+non-destructive *detection* probes for seven vulnerability classes —
+reflected XSS, error-based SQL injection, server-side template injection,
+path traversal, OS command injection (a harmless `echo` only), open
+redirect, and up to 3 well-known default-credential attempts against any
+login form found. It does not extract, modify, or exfiltrate data beyond
+the minimum needed to confirm each class exists (e.g. traversal reads
+`/etc/passwd`/`win.ini` — standard non-sensitive confirmation files, never
+`/etc/shadow` or anything requiring elevated access), but it is still
+active testing, and **running it against a site you don't have explicit
+authorization to test is a criminal offense in most jurisdictions** (e.g.
+the US Computer Fraud and Abuse Act), regardless of intent.
+
+Detection is discovery-then-probe: it crawls the target's homepage for GET
+forms and same-origin links, prioritizing form inputs (a search box, a
+filter) over incidental query-string links, and filtering out static-asset
+links (`?ver=1.2.3` cache-busters on `.css`/`.js`/images/fonts) entirely —
+those are never real inputs and would otherwise crowd out the handful of
+parameters actually worth testing on a busy page.
+
+With up to 6 checks run against every discovered input, a full run can take
+a few minutes on a busy page -- too long to hold a single HTTP request open
+(and past gunicorn's default worker timeout). Like `/batch`, it runs on a
+background thread and redirects to a status page that polls for progress
+and renders findings as soon as they're ready.
 
 It's gated at every layer independently:
 - **Off by default.** Set `ACTIVE_TESTING_ENABLED=1` to turn it on at all —
@@ -141,6 +159,10 @@ rule-based fallback path.
   default; requires `ACTIVE_TESTING_ENABLED=1`, admin login, and a typed
   per-target confirmation even when on. Not passive -- read the section
   above before touching this.
+- `active_scan_job.py` — runs an active scan on a background thread and
+  tracks its progress in memory, the same pattern `batch.py` uses, so the
+  request that kicks it off can return immediately instead of blocking for
+  minutes.
 - `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`
