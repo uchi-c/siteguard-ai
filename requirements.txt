@@ -6,3 +6,11 @@ dnspython>=2.6
 anthropic>=1.4
 gunicorn>=22.0
 python-dotenv>=1.0
+
+# For /admin/classify (payload classifier, ml/train.py). Pulls in numpy/
+# scipy transitively -- adds real weight (~150MB installed, slower cold
+# start) to what was a lightweight app. Worth it for the feature, but if
+# build time/slug size on the host ever becomes a problem, this is where
+# to look first.
+scikit-learn>=1.4
+joblib>=1.3

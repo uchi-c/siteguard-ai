@@ -64,6 +64,28 @@ Use it only for engagements you're actually authorized for (a signed
 pentest, or your own infrastructure) — not the same free-for-all as the
 passive scanner and `/batch`.
 
+### Payload classifier (`/admin/classify`)
+
+A small trained ML model — TF-IDF character n-grams + logistic regression,
+trained on ~233k labeled payloads from a
+[public Kaggle dataset](https://www.kaggle.com/datasets/mreowie/web-application-attack-payload-dataset)
+(`ml/train.py`) — classifies a pasted string as benign, SQL injection, XSS,
+command injection, path traversal, or SSTI. ~99.7% accuracy on held-out
+test data overall; weakest on command injection using less-common syntax
+like `$(...)` or `&&` (see `ml/models/metrics.json` for the full
+classification report). Unlike active-scan, this makes no network calls to
+anything — it's pure local inference on text you paste in, so it's only
+gated behind admin login, not the heavier active-testing gates.
+
+The trained model (`ml/models/payload_classifier.joblib`, ~1MB) is
+committed to the repo as a build artifact; the raw training data isn't
+(12MB, Kaggle-licensed — re-fetch with `kaggle datasets download
+mreowie/web-application-attack-payload-dataset --unzip -p ml/data` if you
+want to retrain). Adds `scikit-learn`/`joblib` to `requirements.txt`,
+which pulls in numpy/scipy transitively — real weight (~150MB installed)
+for what was a lightweight app; worth knowing if Render's free-tier build
+time or slug size ever becomes a constraint.
+
 ## Run it locally
 
 ```bash
@@ -119,6 +141,10 @@ rule-based fallback path.
   default; requires `ACTIVE_TESTING_ENABLED=1`, admin login, and a typed
   per-target confirmation even when on. Not passive -- read the section
   above before touching this.
+- `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
+  classifies pasted text for `/admin/classify`. Local inference only.
+- `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`
+  (gitignored, fetch via Kaggle -- see above). Not run at request time.
 - `templates/` — the actual page design.
 - `test_target.py` — a deliberately broken local server, useful for
   demoing/testing without needing a real site. `python test_target.py` runs

@@ -1,0 +1,12 @@
+{
+  "classes": [
+    "benign",
+    "cmdinj",
+    "sql",
+    "ssti",
+    "traversal",
+    "xss"
+  ],
+  "report": "              precision    recall  f1-score   support\n\n      benign      0.998     0.998     0.998     21832\n      cmdinj      0.999     0.997     0.998     13899\n         sql      0.957     0.982     0.969       546\n        ssti      0.920     0.885     0.902        26\n   traversal      0.987     0.997     0.992      3699\n         xss      0.998     0.995     0.997      6626\n\n    accuracy                          0.997     46628\n   macro avg      0.977     0.976     0.976     46628\nweighted avg      0.997     0.997     0.997     46628\n",
+  "n_samples": 233139
+}

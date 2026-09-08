@@ -39,6 +39,7 @@ from storage import (
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 from active_scan import run_active_scan
+import payload_classifier
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
@@ -289,6 +290,26 @@ def active_scan_start():
 @admin_required
 def active_scan_audit():
     return render_template("active_scan_audit.html", entries=list_active_scan_audit())
+
+
+@app.route("/admin/classify", methods=["GET"])
+@admin_required
+def classify_form():
+    return render_template("classify_form.html", available=payload_classifier.is_available())
+
+
+@app.route("/admin/classify", methods=["POST"])
+@admin_required
+@limiter.limit("30 per minute")
+def classify_start():
+    text = request.form.get("text", "")
+    result = payload_classifier.classify_payload(text)
+    return render_template(
+        "classify_form.html",
+        available=payload_classifier.is_available(),
+        result=result,
+        submitted_text=text,
+    )
 
 
 @app.errorhandler(429)

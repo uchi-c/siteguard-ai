@@ -32,6 +32,18 @@
 <div style="height:20px;"></div>
 
 <div class="card">
+  <h3 style="margin-top:0;">Payload classifier</h3>
+  <p class="muted" style="font-size:14px;">
+    Paste a suspicious string and get an ML classification (benign / SQL
+    injection / XSS / command injection / path traversal / SSTI). Local
+    inference only -- no network calls to any target.
+  </p>
+  <a href="{{ url_for('classify_form') }}" class="btn" style="display:inline-block; text-decoration:none; text-align:center; background:var(--panel-2); color:var(--text); border:1px solid var(--border);">Classify a payload</a>
+</div>
+
+<div style="height:20px;"></div>
+
+<div class="card">
   <h3 style="margin-top:0;">Leads ({{ leads|length }})</h3>
   {% if leads %}
   <div style="overflow-x:auto;">

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Payload classifier{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0;">Payload classifier</h2>
+  <p class="muted" style="font-size:14px;">
+    Paste a suspicious string &mdash; a WAF block-log entry, a request
+    parameter you're unsure about, anything from server logs &mdash; and
+    get a classification: benign, SQL injection, XSS, command injection,
+    path traversal, or SSTI. Runs entirely locally; nothing is sent
+    anywhere. Trained on ~233k labeled payloads (<a href="https://www.kaggle.com/datasets/mreowie/web-application-attack-payload-dataset" target="_blank" rel="noopener">Kaggle dataset</a>),
+    ~99.7% accuracy on held-out test data &mdash; weakest on command
+    injection using less-common syntax like <code>$(...)</code> or
+    <code>&amp;&amp;</code>, so treat a "benign" verdict on something that
+    still looks suspicious with skepticism.
+  </p>
+
+  {% if not available %}
+  <p class="muted">Classifier model isn't available on this deployment (run <code>ml/train.py</code> to build it).</p>
+  {% else %}
+  <form method="post" action="{{ url_for('classify_start') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <textarea name="text" rows="3" placeholder="e.g. ' OR 1=1--"
+      style="width:100%; padding:14px 16px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-family:inherit; font-size:15px; resize:vertical;">{{ submitted_text or "" }}</textarea>
+    <div style="height:14px;"></div>
+    <button type="submit">Classify</button>
+  </form>
+
+  {% if result %}
+    {% if result.error %}
+    <p class="muted" style="margin-top:16px;">{{ result.error }}</p>
+    {% else %}
+    <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+      <div style="font-size:28px; font-weight:800;">{{ result.label }}</div>
+      <div class="muted">{{ (result.confidence * 100)|round(1) }}% confidence</div>
+      <div style="height:12px;"></div>
+      {% for label, score in result.scores.items() %}
+      <div style="display:flex; justify-content:space-between; font-size:13px; padding:3px 0;">
+        <span class="muted">{{ label }}</span>
+        <span>{{ (score * 100)|round(1) }}%</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endif %}
+  {% endif %}
+</div>
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('admin_dashboard') }}">&larr; Back to admin</a></p>
+{% endblock %}

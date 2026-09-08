@@ -176,3 +176,28 @@ def test_active_scan_audit_requires_admin_login(client):
     resp = client.get("/admin/active-scan/audit")
     assert resp.status_code == 302
     assert "/admin/login" in resp.headers["Location"]
+
+
+# --- Payload classifier -------------------------------------------------------
+
+def test_classify_form_requires_admin_login(client):
+    resp = client.get("/admin/classify")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_classify_start_returns_a_real_classification(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/classify", data={"text": "' OR 1=1--"})
+    assert resp.status_code == 200
+    assert b"sql" in resp.data
+    assert b"confidence" in resp.data
+
+
+def test_classify_start_empty_input_shows_error(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/classify", data={"text": ""})
+    assert resp.status_code == 200
+    assert b"Enter some text to classify." in resp.data

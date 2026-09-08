@@ -8,3 +8,11 @@ scans.db-journal
 scans.db-wal
 scans.db-shm
 .venv/
+
+# Raw training data -- large (12MB+), licensed from Kaggle, not source
+# code. Re-fetch with: kaggle datasets download
+# mreowie/web-application-attack-payload-dataset --unzip -p ml/data
+# ml/models/ (the trained classifier) is NOT ignored -- it's a small
+# (~1MB) static artifact the app loads at runtime, committed like any
+# other build output.
+ml/data/
