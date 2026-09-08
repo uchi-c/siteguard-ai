@@ -84,10 +84,30 @@ def _with_param(url: str, param: str, value: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
 
 
+STATIC_ASSET_EXTENSIONS = (
+    ".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+    ".woff", ".woff2", ".ttf", ".eot", ".ico", ".map",
+)
+
+
 def _discover_injection_points(base_url: str) -> list[dict]:
-    """Passive: parse the base URL's own query string, plus forms and
-    same-origin links found on the homepage. No requests beyond the one
-    GET already needed to read the page."""
+    """Passive: parse forms and same-origin links found on the homepage,
+    plus the base URL's own query string. No requests beyond the one GET
+    already needed to read the page.
+
+    Forms are collected FIRST. Ordering matters here because the total is
+    capped at MAX_INJECTION_POINTS: a real page can easily have 30+
+    cache-busting `?ver=1.2.3` links on its own stylesheets/scripts (very
+    common on WordPress) alongside a single real search form. Collecting
+    links before forms let those cache-busters fill every slot before the
+    form's actual input parameter was ever considered -- the scan would
+    "run" and find nothing, on a page that had an obvious, classic
+    reflected-XSS test target (a search box) sitting right there. Static-
+    asset links are filtered out entirely for the same reason: a `?ver=`
+    query string on a .css/.js/image/font request is essentially always a
+    cache-buster, never a real input, so testing it just burns probe
+    budget on a link that was never going to reflect anything.
+    """
     points = []
     seen = set()
 
@@ -97,30 +117,36 @@ def _discover_injection_points(base_url: str) -> list[dict]:
             seen.add(key)
             points.append({"url": url, "param": param})
 
-    for param in parse_qs(urlparse(base_url).query):
-        add(base_url, param)
-
     try:
         r = requests.get(base_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
     except requests.RequestException:
-        return points[:MAX_INJECTION_POINTS]
+        r = None
 
-    origin = urlparse(base_url).netloc
-    for m in re.finditer(r'href=["\']([^"\']+\?[^"\']+)["\']', r.text, re.I):
-        link = urljoin(base_url, m.group(1))
-        if urlparse(link).netloc == origin:
-            for param in parse_qs(urlparse(link).query):
+    if r is not None:
+        for form_match in re.finditer(r"<form\b[^>]*>(.*?)</form>", r.text, re.I | re.S):
+            form_html = form_match.group(0)
+            method_match = re.search(r'method=["\']([^"\']*)["\']', form_html, re.I)
+            if method_match and method_match.group(1).lower() != "get":
+                continue  # skip POST forms -- don't submit unknown data to them
+            action_match = re.search(r'action=["\']([^"\']*)["\']', form_html, re.I)
+            action = urljoin(base_url, action_match.group(1)) if action_match else base_url
+            for input_match in re.finditer(r'<input\b[^>]*name=["\']([^"\']+)["\']', form_html, re.I):
+                add(action, input_match.group(1))
+
+    for param in parse_qs(urlparse(base_url).query):
+        add(base_url, param)
+
+    if r is not None:
+        origin = urlparse(base_url).netloc
+        for m in re.finditer(r'href=["\']([^"\']+\?[^"\']+)["\']', r.text, re.I):
+            link = urljoin(base_url, m.group(1))
+            parsed = urlparse(link)
+            if parsed.netloc != origin:
+                continue
+            if parsed.path.lower().endswith(STATIC_ASSET_EXTENSIONS):
+                continue
+            for param in parse_qs(parsed.query):
                 add(link, param)
-
-    for form_match in re.finditer(r"<form\b[^>]*>(.*?)</form>", r.text, re.I | re.S):
-        form_html = form_match.group(0)
-        method_match = re.search(r'method=["\']([^"\']*)["\']', form_html, re.I)
-        if method_match and method_match.group(1).lower() != "get":
-            continue  # skip POST forms -- don't submit unknown data to them
-        action_match = re.search(r'action=["\']([^"\']*)["\']', form_html, re.I)
-        action = urljoin(base_url, action_match.group(1)) if action_match else base_url
-        for input_match in re.finditer(r'<input\b[^>]*name=["\']([^"\']+)["\']', form_html, re.I):
-            add(action, input_match.group(1))
 
     return points[:MAX_INJECTION_POINTS]
 

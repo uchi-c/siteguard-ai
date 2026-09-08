@@ -128,6 +128,41 @@ def vulnerable_target_url():
     srv.shutdown()
 
 
+@pytest.fixture(scope="session")
+def wordpress_like_target_url():
+    """Regression fixture for a real bug: a page with a real GET search
+    form (a classic reflected-XSS target) plus 20 cache-busting `?ver=`
+    links on its own static assets (very common on WordPress). Discovery
+    used to collect link-based points before form-based ones, so with
+    MAX_INJECTION_POINTS capping the total, the cache-busters filled every
+    slot and the search form's real parameter was silently dropped --
+    the scan would "run" and find nothing on a page with an obvious
+    target sitting right there."""
+    from flask import Flask, request as flask_request
+
+    wp = Flask("wordpress_like_test_target")
+
+    @wp.route("/")
+    def home():
+        asset_links = "".join(
+            f'<link rel="stylesheet" href="/assets/style{i}.css?ver=1.0.{i}">'
+            for i in range(20)
+        )
+        return (f'<html><head>{asset_links}</head><body>'
+                f'<form method="get" class="search-form" action="/">'
+                f'<input type="search" name="s"></form>'
+                f'</body></html>')
+
+    @wp.route("/assets/<path:filename>")
+    def asset(filename):
+        return "/* css */", 200, {"Content-Type": "text/css"}
+
+    srv = _ServerThread(wp)
+    srv.start()
+    yield f"http://127.0.0.1:{srv.port}"
+    srv.shutdown()
+
+
 @pytest.fixture
 def allow_private(monkeypatch):
     """Lets the SSRF guard through for tests that deliberately scan 127.0.0.1."""
