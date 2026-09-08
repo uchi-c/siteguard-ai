@@ -297,6 +297,7 @@ def active_scan_start():
     target = (request.form.get("target") or "").strip()
     confirm_host = (request.form.get("confirm_host") or "").strip()
     authorized = request.form.get("authorized") == "on"
+    test_post_forms = request.form.get("test_post_forms") == "on"
 
     if not target or not authorized:
         flash("Enter a target and confirm you're authorized to test it.")
@@ -310,8 +311,10 @@ def active_scan_start():
     log_active_scan_authorization(target, expected_host)
 
     job_id = secrets.token_urlsafe(8)
-    active_scan_job.create_job(job_id, target)
-    threading.Thread(target=active_scan_job.run_job, args=(job_id, target), daemon=True).start()
+    active_scan_job.create_job(job_id, target, test_post_forms=test_post_forms)
+    threading.Thread(
+        target=active_scan_job.run_job, args=(job_id, target, test_post_forms), daemon=True,
+    ).start()
 
     return redirect(url_for("active_scan_status", job_id=job_id))
 

@@ -23,11 +23,12 @@ _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 
 
-def create_job(job_id: str, target: str) -> None:
+def create_job(job_id: str, target: str, test_post_forms: bool = False) -> None:
     with _lock:
         _jobs[job_id] = {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target": target,
+            "test_post_forms": test_post_forms,
             "finished": False,
             "result": None,
         }
@@ -39,8 +40,8 @@ def get_job(job_id: str) -> dict | None:
         return dict(job) if job else None
 
 
-def run_job(job_id: str, target: str) -> None:
-    result = run_active_scan(target)
+def run_job(job_id: str, target: str, test_post_forms: bool = False) -> None:
+    result = run_active_scan(target, test_post_forms=test_post_forms)
     with _lock:
         job = _jobs.get(job_id)
         if not job:

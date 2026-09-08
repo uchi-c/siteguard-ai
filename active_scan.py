@@ -16,6 +16,17 @@ rendering the page in headless Chromium (js_discovery.py) before giving up
 -- some sites (React/Vue/Next.js-style SPAs) render their real forms via
 client-side JS, invisible to a raw-HTML parse.
 
+By default, only GET-based inputs are tested (query-string links, GET
+forms) -- inert to discover and probe, since a GET request has no side
+effects on the target beyond being logged. POST forms (signup, login,
+contact) are a deliberately separate, opt-in-only surface
+(test_post_forms=True, wired from an explicit checkbox in the admin UI,
+distinct from the general authorization checkbox): testing them means
+actually submitting the form, which can create a real account/lead or
+trigger a real email/notification on the target's end. That's a
+qualitatively different risk than anything else in this module, so it's
+never on by accident.
+
 This is fundamentally different from scanner.py's passive checks and is
 gated hard, at multiple independent layers (see app.py):
   - Only reachable via an authenticated /admin session.
@@ -46,6 +57,11 @@ from scanner import TIMEOUT, USER_AGENT, UnsafeTargetError, _normalize_url, _res
 from js_discovery import discover_injection_points_js
 
 MAX_INJECTION_POINTS = 15
+# Much lower than MAX_INJECTION_POINTS on purpose: every POST point means a
+# real form submission, repeated once per check -- this is real request
+# volume against a real endpoint with real side effects, not an inert GET.
+MAX_POST_INJECTION_POINTS = 3
+POST_FORM_SKIP_TYPES = ("checkbox", "radio", "submit", "button", "image", "reset", "file")
 
 SQL_ERROR_SIGNATURES = [
     "you have an error in your sql syntax",   # MySQL
@@ -126,7 +142,80 @@ STATIC_ASSET_EXTENSIONS = (
 )
 
 
-def _discover_injection_points(base_url: str) -> list[dict]:
+def _field_placeholder(name: str, input_type: str) -> str:
+    """A benign value for a POST field that ISN'T the one under test --
+    real forms usually have more than one required field (password +
+    confirm-password, email, name), and submitting with those left blank
+    typically just fails client/server validation before the payload
+    field is ever reached. Uses the same placeholder for every field of a
+    given kind (e.g. all 'pass'-like fields) so a confirm-password field
+    matches its password field."""
+    n = name.lower()
+    t = (input_type or "text").lower()
+    if "email" in n or t == "email":
+        return "sgaiprobe@example.test"
+    if "pass" in n or t == "password":
+        return "SgaiProbe123!@#"
+    if "phone" in n or "tel" in n or t == "tel":
+        return "5555550100"
+    if t == "url":
+        return "https://example.test"
+    if "name" in n:
+        return "SGAI Test"
+    return "sgaiplaceholder1"
+
+
+def _discover_post_points(base_url: str, html: str) -> list[dict]:
+    """POST forms, capped at MAX_POST_INJECTION_POINTS (see why there).
+    Hidden fields (often CSRF tokens or form IDs) keep their real
+    discovered value rather than a placeholder -- overwriting one would
+    likely just get the whole submission rejected before any check could
+    run. Only non-hidden, non-checkbox/radio/file-type fields are
+    considered as things to actually test."""
+    points = []
+    seen = set()
+
+    def add(url, param, fields):
+        key = (url, param)
+        if key not in seen:
+            seen.add(key)
+            points.append({"url": url, "param": param, "method": "post", "fields": fields})
+
+    for form_match in re.finditer(r"<form\b[^>]*>(.*?)</form>", html, re.I | re.S):
+        if len(points) >= MAX_POST_INJECTION_POINTS:
+            break
+        form_html = form_match.group(0)
+        method_match = re.search(r'method=["\']([^"\']*)["\']', form_html, re.I)
+        if not method_match or method_match.group(1).lower() != "post":
+            continue
+        action_match = re.search(r'action=["\']([^"\']*)["\']', form_html, re.I)
+        action = urljoin(base_url, action_match.group(1)) if action_match else base_url
+
+        testable = []
+        fields = {}
+        for input_match in re.finditer(r'<input\b([^>]*)name=["\']([^"\']+)["\']([^>]*)>', form_html, re.I):
+            attrs = input_match.group(1) + input_match.group(3)
+            name = input_match.group(2)
+            type_match = re.search(r'type=["\']([^"\']+)["\']', attrs, re.I)
+            input_type = (type_match.group(1) if type_match else "text").lower()
+            if input_type in POST_FORM_SKIP_TYPES:
+                continue
+            if input_type == "hidden":
+                value_match = re.search(r'value=["\']([^"\']*)["\']', attrs, re.I)
+                fields[name] = value_match.group(1) if value_match else ""
+                continue
+            testable.append(name)
+            fields[name] = _field_placeholder(name, input_type)
+
+        for name in testable:
+            if len(points) >= MAX_POST_INJECTION_POINTS:
+                break
+            add(action, name, {k: v for k, v in fields.items() if k != name})
+
+    return points
+
+
+def _discover_injection_points(base_url: str, test_post_forms: bool = False) -> list[dict]:
     """Passive: parse forms and same-origin links found on the homepage,
     plus the base URL's own query string. No requests beyond the one GET
     already needed to read the page.
@@ -185,103 +274,125 @@ def _discover_injection_points(base_url: str) -> list[dict]:
                 add(link, param)
 
     capped = points[:MAX_INJECTION_POINTS]
-    if capped:
-        return capped
+    post_points = _discover_post_points(base_url, r.text) if (test_post_forms and r is not None) else []
+
+    if capped or post_points:
+        return capped + post_points
 
     # Nothing in the raw HTML at all -- likely a JS-rendered SPA (React/
     # Vue/Next.js-style) where the real forms only exist after client-side
     # JS runs, invisible to the regex parse above (see js_discovery.py).
     # Best-effort: never raises, just returns [] if it doesn't work out.
-    return discover_injection_points_js(base_url)[:MAX_INJECTION_POINTS]
+    return discover_injection_points_js(base_url, test_post_forms=test_post_forms)
+
+
+def _probe(point: dict, payload: str, allow_redirects: bool = True) -> requests.Response | None:
+    """Sends one probe request for a point, GET (query string) or POST
+    (form body, merging the discovered other-field placeholders with the
+    payload in the field under test) depending on how it was discovered.
+    Returns None on any network failure -- every caller already treats
+    that the same as 'no evidence'."""
+    try:
+        if point.get("method") == "post":
+            data = {**point.get("fields", {}), point["param"]: payload}
+            return requests.post(point["url"], data=data, headers={"User-Agent": USER_AGENT},
+                                  timeout=TIMEOUT, allow_redirects=allow_redirects)
+        test_url = _with_param(point["url"], point["param"], payload)
+        return requests.get(test_url, headers={"User-Agent": USER_AGENT},
+                             timeout=TIMEOUT, allow_redirects=allow_redirects)
+    except requests.RequestException:
+        return None
+
+
+def _location_label(point: dict, payload: str) -> str:
+    if point.get("method") == "post":
+        return f"{point['url']} (POST field '{point['param']}')"
+    return _with_param(point["url"], point["param"], payload)
+
+
+def _field_label(point: dict) -> str:
+    if point.get("method") == "post":
+        return f"POST field '{point['param']}'"
+    return f"parameter '{point['param']}'"
 
 
 def _test_reflected_xss(point: dict) -> ActiveFinding | None:
     marker = f"sgaiprobe{secrets.token_hex(4)}"
     probe_value = f"<{marker}>"
-    test_url = _with_param(point["url"], point["param"], probe_value)
-    try:
-        r = requests.get(test_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    except requests.RequestException:
+    r = _probe(point, probe_value)
+    if r is None:
         return None
     if probe_value in r.text:
         return ActiveFinding(
             check="reflected-xss", severity="high",
-            title=f"Reflected, unescaped input in parameter '{point['param']}'",
+            title=f"Reflected, unescaped input in {_field_label(point)}",
             detail=(f"A harmless test marker injected into '{point['param']}' was "
                      f"reflected back in the response without HTML-encoding. A real "
                      f"attacker could use this to inject scripts that run in victims' "
                      f"browsers (session theft, defacement, credential phishing)."),
-            location=test_url,
+            location=_location_label(point, probe_value),
         )
     return None
 
 
 def _test_sqli(point: dict) -> ActiveFinding | None:
-    baseline_url = _with_param(point["url"], point["param"], "sgaiprobe1")
-    probe_url = _with_param(point["url"], point["param"], "sgaiprobe1'")
-    try:
-        baseline = requests.get(baseline_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-        time.sleep(0.1)
-        probe = requests.get(probe_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-    except requests.RequestException:
+    baseline = _probe(point, "sgaiprobe1")
+    time.sleep(0.1)
+    probe = _probe(point, "sgaiprobe1'")
+    if baseline is None or probe is None:
         return None
     probe_lower, baseline_lower = probe.text.lower(), baseline.text.lower()
     for sig in SQL_ERROR_SIGNATURES:
         if sig in probe_lower and sig not in baseline_lower:
             return ActiveFinding(
                 check="sqli-error-based", severity="critical",
-                title=f"Possible SQL injection in parameter '{point['param']}'",
+                title=f"Possible SQL injection in {_field_label(point)}",
                 detail=(f"Injecting a single quote into '{point['param']}' produced a "
                          f"database error ('{sig}') absent with a normal value, "
                          f"suggesting unsanitized input reaches a SQL query directly. "
                          f"This can allow full database compromise."),
-                location=probe_url,
+                location=_location_label(point, "sgaiprobe1'"),
             )
     return None
 
 
 def _test_ssti(point: dict) -> ActiveFinding | None:
     for payload, expected in SSTI_PROBES:
-        baseline_url = _with_param(point["url"], point["param"], "sgaibaseline1")
-        probe_url = _with_param(point["url"], point["param"], payload)
-        try:
-            baseline = requests.get(baseline_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-            time.sleep(0.1)
-            probe = requests.get(probe_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-        except requests.RequestException:
+        baseline = _probe(point, "sgaibaseline1")
+        time.sleep(0.1)
+        probe = _probe(point, payload)
+        if baseline is None or probe is None:
             continue
         if expected in probe.text and expected not in baseline.text:
             return ActiveFinding(
                 check="ssti", severity="critical",
-                title=f"Possible server-side template injection in parameter '{point['param']}'",
+                title=f"Possible server-side template injection in {_field_label(point)}",
                 detail=(f"Injecting '{payload}' into '{point['param']}' caused the "
                          f"evaluated result ('{expected}') to appear in the response -- "
                          f"absent with a plain value -- suggesting the input is passed "
                          f"into a template engine and evaluated. Often escalates to full "
                          f"remote code execution."),
-                location=probe_url,
+                location=_location_label(point, payload),
             )
     return None
 
 
 def _test_traversal(point: dict) -> ActiveFinding | None:
     for payload in TRAVERSAL_PROBES:
-        test_url = _with_param(point["url"], point["param"], payload)
-        try:
-            r = requests.get(test_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-        except requests.RequestException:
+        r = _probe(point, payload)
+        if r is None:
             continue
         text = r.text
         if ("root:" in text and ":0:0:" in text) or "[extensions]" in text:
             return ActiveFinding(
                 check="path-traversal", severity="critical",
-                title=f"Possible path traversal in parameter '{point['param']}'",
+                title=f"Possible path traversal in {_field_label(point)}",
                 detail=(f"Injecting '{payload}' into '{point['param']}' returned what "
                          f"looks like the contents of a system file, suggesting the "
                          f"parameter is used to read files from disk without validating "
                          f"the path. Can expose configuration, source code, or "
                          f"credentials stored elsewhere on the server."),
-                location=test_url,
+                location=_location_label(point, payload),
             )
     return None
 
@@ -290,10 +401,9 @@ def _test_command_injection(point: dict) -> ActiveFinding | None:
     marker = f"sgaicmdi{secrets.token_hex(4)}"
     for template in CMDI_PAYLOAD_TEMPLATES:
         payload = template.format(marker=marker)
-        test_url = _with_param(point["url"], point["param"], payload)
-        try:
-            r = requests.get(test_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-        except requests.RequestException:
+        r = _probe(point, payload)
+        if r is None:
+            time.sleep(0.1)
             continue
         # Any endpoint that reflects its input verbatim (a "you searched
         # for X" message, a redirect's fallback link) will contain the
@@ -305,12 +415,12 @@ def _test_command_injection(point: dict) -> ActiveFinding | None:
         if marker in r.text and payload not in r.text:
             return ActiveFinding(
                 check="command-injection", severity="critical",
-                title=f"Possible OS command injection in parameter '{point['param']}'",
+                title=f"Possible OS command injection in {_field_label(point)}",
                 detail=(f"Injecting a shell metacharacter sequence into '{point['param']}' "
                          f"caused an injected 'echo' command's output to appear in the "
                          f"response, suggesting the input reaches a shell command "
                          f"unsanitized. Typically a full remote-code-execution vulnerability."),
-                location=test_url,
+                location=_location_label(point, payload),
             )
         time.sleep(0.1)
     return None
@@ -320,21 +430,19 @@ def _test_open_redirect(point: dict) -> ActiveFinding | None:
     if not any(hint in point["param"].lower() for hint in OPEN_REDIRECT_PARAM_HINTS):
         return None  # only worth testing params that look like they control a redirect
     probe_target = f"https://{OPEN_REDIRECT_TEST_HOST}/"
-    test_url = _with_param(point["url"], point["param"], probe_target)
-    try:
-        r = requests.get(test_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, allow_redirects=False)
-    except requests.RequestException:
+    r = _probe(point, probe_target, allow_redirects=False)
+    if r is None:
         return None
     location = r.headers.get("Location", "")
     if r.status_code in (301, 302, 303, 307, 308) and OPEN_REDIRECT_TEST_HOST in location:
         return ActiveFinding(
             check="open-redirect", severity="medium",
-            title=f"Possible open redirect via parameter '{point['param']}'",
+            title=f"Possible open redirect via {_field_label(point)}",
             detail=(f"Setting '{point['param']}' to an external URL made the server "
                      f"redirect there directly, without validating it's an internal or "
                      f"allow-listed destination. Commonly abused for phishing -- a link "
                      f"on your real domain that silently sends visitors elsewhere."),
-            location=test_url,
+            location=_location_label(point, probe_target),
         )
     return None
 
@@ -397,7 +505,7 @@ def _test_weak_credentials(base_url: str) -> list[ActiveFinding]:
     return findings
 
 
-def run_active_scan(target: str) -> ActiveScanResult:
+def run_active_scan(target: str, test_post_forms: bool = False) -> ActiveScanResult:
     url = _normalize_url(target)
     hostname = urlparse(url).hostname or target
     result = ActiveScanResult(target=url, scanned_at=datetime.now(timezone.utc).isoformat())
@@ -408,7 +516,7 @@ def run_active_scan(target: str) -> ActiveScanResult:
         result.error = str(e)
         return result
 
-    points = _discover_injection_points(url)
+    points = _discover_injection_points(url, test_post_forms=test_post_forms)
     result.injection_points_tested = len(points)
 
     checks = [

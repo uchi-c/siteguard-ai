@@ -32,7 +32,7 @@ def test_discovery_falls_back_to_js_rendering_when_html_crawl_finds_nothing(monk
     its raw HTML must trigger the headless-browser fallback rather than
     silently reporting 0 injection points."""
     monkeypatch.setattr(active_scan, "discover_injection_points_js",
-                         lambda base_url: [{"url": base_url + "/api/signup", "param": "email"}])
+                         lambda base_url, test_post_forms=False: [{"url": base_url + "/api/signup", "param": "email"}])
 
     # An unreachable target means the raw-HTML crawl finds nothing on its own.
     points = active_scan._discover_injection_points("http://127.0.0.1:1/spa-like")
@@ -44,7 +44,7 @@ def test_discovery_skips_js_fallback_when_html_crawl_finds_points(monkeypatch, w
     regex crawl already found real points."""
     calls = []
     monkeypatch.setattr(active_scan, "discover_injection_points_js",
-                         lambda base_url: calls.append(base_url) or [])
+                         lambda base_url, test_post_forms=False: calls.append(base_url) or [])
 
     points = active_scan._discover_injection_points(wordpress_like_target_url)
     assert points  # the wordpress fixture's search form should still be found
@@ -121,3 +121,74 @@ def test_discover_injection_points_prioritizes_forms_over_asset_noise(wordpress_
     assert any(p["param"] == "s" for p in points), f"search form param missing: {points}"
     # And the noise shouldn't even make it in -- static assets are filtered.
     assert not any(p["url"].endswith(".css") for p in points)
+
+
+# --- POST-form testing (opt-in, real side effects) ---------------------------
+
+def test_field_placeholder_fills_recognizable_types():
+    assert "@" in active_scan._field_placeholder("email", "email")
+    assert active_scan._field_placeholder("q", "text") == "sgaiplaceholder1"
+
+
+def test_field_placeholder_consistent_for_matching_field_names():
+    """A password + confirm-password pair must get the SAME placeholder,
+    or a form that checks they match would reject the submission and no
+    check downstream would ever see a real response."""
+    pw = active_scan._field_placeholder("password", "password")
+    confirm = active_scan._field_placeholder("confirm_password", "password")
+    assert pw == confirm
+
+
+def test_location_label_and_field_label_for_post_vs_get():
+    get_point = {"url": "http://x.test/", "param": "q"}
+    post_point = {"url": "http://x.test/contact", "param": "message", "method": "post", "fields": {}}
+    assert active_scan._field_label(get_point) == "parameter 'q'"
+    assert active_scan._field_label(post_point) == "POST field 'message'"
+    assert active_scan._location_label(post_point, "x") == "http://x.test/contact (POST field 'message')"
+
+
+def test_discover_post_points_captures_hidden_value_and_skips_checkbox(vulnerable_post_target_url):
+    import requests
+    html = requests.get(vulnerable_post_target_url).text
+    points = active_scan._discover_post_points(vulnerable_post_target_url, html)
+
+    params = {p["param"] for p in points}
+    assert "message" in params
+    assert "subscribe" not in params  # checkbox -- never a good injection target, and never submitted
+
+    message_point = next(p for p in points if p["param"] == "message")
+    assert message_point["method"] == "post"
+    assert message_point["fields"]["csrf_token"] == "fixed-token-abc"  # real value, not a placeholder
+    assert "subscribe" not in message_point["fields"]
+    assert "message" not in message_point["fields"]  # the field under test isn't in "other fields"
+
+
+def test_discover_post_points_caps_at_max_post_injection_points(monkeypatch):
+    monkeypatch.setattr(active_scan, "MAX_POST_INJECTION_POINTS", 1)
+    html = '<form method="post" action="/x"><input name="a"><input name="b"></form>'
+    points = active_scan._discover_post_points("http://x.test/", html)
+    assert len(points) == 1
+
+
+def test_discover_injection_points_includes_post_when_enabled(vulnerable_post_target_url, allow_private):
+    points = active_scan._discover_injection_points(vulnerable_post_target_url, test_post_forms=True)
+    assert any(p.get("method") == "post" and p["param"] == "message" for p in points)
+
+
+def test_discover_injection_points_excludes_post_by_default(vulnerable_post_target_url, allow_private):
+    points = active_scan._discover_injection_points(vulnerable_post_target_url)
+    assert not any(p.get("method") == "post" for p in points)
+
+
+def test_run_active_scan_detects_xss_in_post_form_when_enabled(vulnerable_post_target_url, allow_private):
+    result = active_scan.run_active_scan(vulnerable_post_target_url, test_post_forms=True)
+    xss = [f for f in result.findings if f.check == "reflected-xss"]
+    assert xss, f"expected a POST-field XSS finding, got: {[(f.check, f.title) for f in result.findings]}"
+    assert "message" in xss[0].title
+    assert "(POST field" in xss[0].location
+
+
+def test_run_active_scan_skips_post_form_by_default(vulnerable_post_target_url, allow_private):
+    result = active_scan.run_active_scan(vulnerable_post_target_url)
+    assert result.injection_points_tested == 0
+    assert result.findings == []

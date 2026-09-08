@@ -1,3 +1,4 @@
+import types
 from unittest.mock import MagicMock
 
 import app as app_module
@@ -172,10 +173,18 @@ def test_lead_appears_in_admin_dashboard(client, monkeypatch):
 def test_lead_without_scan_id_does_not_start_an_email_thread(client, monkeypatch):
     """No scan_id (e.g. an old bookmarked report, or the field stripped) --
     nothing to email, and the lead-capture flow must still work exactly as
-    before this feature existed."""
+    before this feature existed.
+
+    Replaces app_module's OWN `threading` name binding with a fake object,
+    not threading.Thread itself -- the latter is the real, shared stdlib
+    module, and mutating it out from under Flask-Limiter's internal Timer
+    usage corrupts unrelated tests (confirmed: it did, cascading failures
+    in tests that never touch this code at all)."""
     started = []
-    monkeypatch.setattr(app_module.threading, "Thread",
-                         lambda *a, **k: started.append(1) or MagicMock())
+    fake_threading = types.SimpleNamespace(
+        Thread=lambda *a, **k: started.append(1) or MagicMock(),
+    )
+    monkeypatch.setattr(app_module, "threading", fake_threading)
 
     resp = client.post("/lead", data={
         "email": "prospect@test.com", "target": "https://example.test",
@@ -194,7 +203,8 @@ def test_lead_with_scan_id_starts_a_background_email_thread(client, monkeypatch)
         thread_calls.append((args, kwargs))
         return fake_thread
 
-    monkeypatch.setattr(app_module.threading, "Thread", fake_thread_ctor)
+    fake_threading = types.SimpleNamespace(Thread=fake_thread_ctor)
+    monkeypatch.setattr(app_module, "threading", fake_threading)
 
     resp = client.post("/lead", data={
         "email": "prospect@test.com", "target": "https://example.test",
@@ -311,6 +321,51 @@ def test_active_scan_start_logs_authorization_and_starts_a_job(client, monkeypat
     assert resp.status_code == 302
     assert "/admin/active-scan/" in resp.headers["Location"]
     assert logged == {"target": "https://example.test", "hostname": "example.test"}
+
+
+def test_active_scan_start_passes_test_post_forms_checkbox_through(client, monkeypatch):
+    """The POST-forms checkbox is a separate, higher-risk opt-in from the
+    general authorization checkbox -- must actually reach create_job, not
+    just get silently dropped. (Doesn't touch threading.Thread -- that's
+    the real, shared stdlib module, and mocking it out from under
+    Flask-Limiter's internal Timer usage corrupts unrelated tests. The
+    background thread this route starts is harmless to let run for real:
+    create_job is mocked below, so the real run_job finds no job under
+    this id and returns immediately without making any network call.)"""
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", True)
+    monkeypatch.setattr(app_module, "log_active_scan_authorization", lambda target, hostname: None)
+
+    created = {}
+    monkeypatch.setattr(app_module.active_scan_job, "create_job",
+                         lambda job_id, target, test_post_forms=False:
+                             created.update(target=target, test_post_forms=test_post_forms))
+
+    client.post("/admin/login", data={"password": "correct-horse"})
+    client.post("/admin/active-scan", data={
+        "target": "https://example.test", "confirm_host": "example.test",
+        "authorized": "on", "test_post_forms": "on",
+    })
+
+    assert created == {"target": "https://example.test", "test_post_forms": True}
+
+
+def test_active_scan_start_defaults_test_post_forms_to_false(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setattr(app_module, "ACTIVE_TESTING_ENABLED", True)
+    monkeypatch.setattr(app_module, "log_active_scan_authorization", lambda target, hostname: None)
+
+    created = {}
+    monkeypatch.setattr(app_module.active_scan_job, "create_job",
+                         lambda job_id, target, test_post_forms=False:
+                             created.update(test_post_forms=test_post_forms))
+
+    client.post("/admin/login", data={"password": "correct-horse"})
+    client.post("/admin/active-scan", data={
+        "target": "https://example.test", "confirm_host": "example.test", "authorized": "on",
+    })
+
+    assert created == {"test_post_forms": False}
 
 
 def test_active_scan_status_unknown_job_flashes_and_redirects(client, monkeypatch):

@@ -108,6 +108,27 @@ Use it only for engagements you're actually authorized for (a signed
 pentest, or your own infrastructure) — not the same free-for-all as the
 passive scanner and `/batch`.
 
+**POST forms (signup, login, contact) are a separate, opt-in checkbox**,
+distinct from the general authorization checkbox. By default, discovery
+and every check above only ever touches GET-based inputs (query-string
+links, GET forms) — inert to test, since a GET request has no side effects
+on the target beyond being logged. A real signup/login form is almost
+always POST (GET would leak email/password into browser history and
+server logs), so leaving this off means active-scan will legitimately
+report 0 findings on a page whose only interesting input is that POST
+form — this is what happened testing uruu.enterprises and alardio.com
+before this existed, and it's the correct, safe default, not a bug to
+chase. Checking the box makes discovery capture the form's other fields
+too (filling them with placeholder values — the SAME placeholder for
+matching field types, e.g. all password-like fields, so a
+confirm-password field matches) and submits real POST requests with the
+tested field carrying each check's payload. That means **real submissions
+to a real endpoint** — it can create a test account/lead or trigger a
+real email/notification on the target's end, which nothing else in this
+tool does. Capped far lower than GET discovery (`MAX_POST_INJECTION_POINTS
+= 3` in `active_scan.py`) for exactly that reason — every point here is a
+real side effect, repeated once per check, not an inert query string.
+
 ### Payload classifier (`/admin/classify`)
 
 A small trained ML model — TF-IDF character n-grams + logistic regression,

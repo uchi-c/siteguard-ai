@@ -38,12 +38,12 @@ _WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "js_di
 _SUBPROCESS_TIMEOUT = 25  # seconds -- generous over the worker's own 15s nav timeout + 1.5s settle
 
 
-def discover_injection_points_js(base_url: str) -> list[dict]:
+def discover_injection_points_js(base_url: str, test_post_forms: bool = False) -> list[dict]:
     if not JS_DISCOVERY_ENABLED:
         return []
     try:
         proc = subprocess.run(
-            [sys.executable, _WORKER_SCRIPT, base_url],
+            [sys.executable, _WORKER_SCRIPT, base_url, "1" if test_post_forms else "0"],
             capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
         )
         if proc.returncode != 0:

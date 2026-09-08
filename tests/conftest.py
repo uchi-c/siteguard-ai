@@ -235,6 +235,48 @@ def wordpress_like_target_url():
 
 
 @pytest.fixture(scope="session")
+def vulnerable_post_target_url():
+    """A page with ONLY a POST form (no GET points at all) -- validates
+    active_scan.py's opt-in POST-form testing path end to end: discovery
+    must capture the hidden CSRF token's real value and skip the
+    checkbox, and the probe must submit a full body (all fields, not just
+    the one under test) or the server-side checks below reject it and no
+    finding is produced. A finding showing up is proof the whole pipeline
+    (discovery -> field-filling -> probing) worked correctly; its absence
+    would mean something regressed."""
+    from flask import Flask, request as flask_request
+
+    vuln = Flask("vulnerable_post_test_target")
+
+    @vuln.route("/")
+    def home():
+        return ('<html><body>'
+                '<form method="post" action="/contact">'
+                '<input type="hidden" name="csrf_token" value="fixed-token-abc">'
+                '<input type="text" name="name">'
+                '<input type="email" name="email">'
+                '<input type="text" name="message">'
+                '<input type="checkbox" name="subscribe">'
+                '<input type="submit" value="Send">'
+                '</form>'
+                '</body></html>')
+
+    @vuln.route("/contact", methods=["POST"])
+    def contact():
+        if flask_request.form.get("csrf_token") != "fixed-token-abc":
+            return "Invalid CSRF token", 403
+        if "subscribe" in flask_request.form:
+            return "Unexpected checkbox value submitted", 400
+        message = flask_request.form.get("message", "")
+        return f"<html><body>Thanks! Message: {message}</body></html>"
+
+    srv = _ServerThread(vuln)
+    srv.start()
+    yield f"http://127.0.0.1:{srv.port}"
+    srv.shutdown()
+
+
+@pytest.fixture(scope="session")
 def js_spa_target_url():
     """A minimal SPA-style page whose form only exists in the DOM after
     client-side JS runs -- the raw HTML response has none, matching real

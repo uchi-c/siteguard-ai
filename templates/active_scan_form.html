@@ -44,6 +44,17 @@
       target.</span>
     </label>
 
+    <div style="height:14px;"></div>
+
+    <label style="display:flex; align-items:flex-start; gap:8px; font-size:14px;">
+      <input type="checkbox" name="test_post_forms" style="width:auto; margin-top:3px;">
+      <span>Also test POST forms (signup, login, contact). Unlike everything
+      else above, this <strong>submits real data to the target</strong> --
+      it may create a test account or lead, or trigger a real email/
+      notification on their end. Leave unchecked to stay limited to
+      GET-parameter testing only, which has no side effects.</span>
+    </label>
+
     <div style="height:18px;"></div>
     <button type="submit" class="btn-danger">Run active tests</button>
   </form>
