@@ -42,7 +42,28 @@
     border-radius: 14px;
     padding: 28px;
     overflow-wrap: break-word;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 28px -18px rgba(0,0,0,0.6);
   }
+  .grade-hero { text-align: center; }
+  .grade-ring {
+    width: 132px; height: 132px; margin: 18px auto 12px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background:
+      radial-gradient(closest-side, var(--panel) 68%, transparent 69% 100%),
+      conic-gradient(var(--ring-color) 360deg, var(--ring-color) 0);
+    position: relative;
+  }
+  .grade-ring span {
+    font-size: 52px; font-weight: 800; line-height: 1;
+    color: var(--ring-color);
+    text-shadow: 0 0 24px color-mix(in srgb, var(--ring-color) 55%, transparent);
+  }
+  .score-bar {
+    height: 6px; border-radius: 4px; background: var(--panel-2);
+    max-width: 260px; margin: 14px auto 0; overflow: hidden;
+  }
+  .score-bar-fill { height: 100%; border-radius: 4px; transition: width .4s ease; }
   .flash {
     background: var(--panel-2); border: 1px solid var(--border);
     border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; color: var(--accent);
@@ -68,13 +89,15 @@
     font-size: 16px;
     cursor: pointer;
     width: 100%;
+    transition: filter .15s ease, transform .1s ease;
   }
-  button:hover, .btn:hover { filter: brightness(1.05); }
+  button:hover, .btn:hover { filter: brightness(1.08); }
+  button:active, .btn:active { transform: scale(.98); }
   button:disabled { opacity: .85; cursor: wait; filter: none; }
   .btn-secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
   .btn-danger { background: var(--critical); color: #1a0505; }
   .btn-sm { width: auto; padding: 8px 14px; font-size: 13px; }
-  .pill { background: var(--panel-2); border: 1px solid var(--border); padding: 6px 12px; border-radius: 20px; font-size: 13px; }
+  .pill { background: var(--panel-2); border: 1px solid var(--border); padding: 6px 12px; border-radius: 20px; font-size: 13px; font-variant-numeric: tabular-nums; }
   .table-wrap { overflow-x: auto; }
   .data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   .data-table th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }

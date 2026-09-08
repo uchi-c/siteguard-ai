@@ -28,7 +28,18 @@ prospect's site rather than waiting for them to find yours.
 Every scan is saved and gets a **shareable link** (`/report/<id>`) shown on
 the report page, so you can send someone the actual report instead of a
 screenshot — e.g. as the "here's what a secure setup looks like" proof
-mentioned below.
+mentioned below. The report page also has a **Download PDF** button
+(`/report/<id>/pdf`) for a print-ready copy of the same report, rendered
+with headless Chromium (`pdf_export.py`) via a separate print-optimized
+template (`templates/report_print.html`) rather than a screenshot of the
+dark-themed web page.
+
+When someone submits their email on the "send me the fix plan" form, the
+same PDF is **emailed to them automatically** along with the report link
+(`emailer.py`, on a background thread so a slow render/send never blocks
+the request) — off by default until `SMTP_USERNAME`/`SMTP_PASSWORD` are
+set (see `.env.example`), same pattern as `ANTHROPIC_API_KEY`: lead capture
+works identically either way, this is just a bonus on top.
 
 For working a whole prospect list at once, **`/batch`** (linked from the
 homepage) takes up to 8 URLs, one per line, and scans them in the
@@ -182,6 +193,14 @@ rule-based fallback path.
   Chromium discovery fallback for JS-rendered sites (see above). The worker
   does the actual rendering as its own subprocess; `js_discovery.py` just
   spawns it and turns any failure into "found nothing."
+- `pdf_export.py` / `pdf_export_worker.py` — renders a report to PDF with
+  headless Chromium print-to-PDF, same subprocess-isolation pattern as
+  `js_discovery.py`. Used by `/report/<id>/pdf` and by the lead-capture
+  email.
+- `emailer.py` — sends a lead their report by email via SMTP (Gmail by
+  default) when they submit the fix-plan form. Off until `SMTP_USERNAME`/
+  `SMTP_PASSWORD` are set; never raises, so a bad config or network hiccup
+  can't break lead capture.
 - `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`

@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import app as app_module
 
 
@@ -25,6 +27,58 @@ def test_report_missing_id_redirects_with_flash(client):
     resp = client.get("/report/does-not-exist", follow_redirects=True)
     assert resp.status_code == 200
     assert "doesn't exist or has expired".encode() in resp.data.replace(b"&#39;", b"'")
+
+
+def test_report_pdf_missing_id_redirects_with_flash(client):
+    resp = client.get("/report/does-not-exist/pdf", follow_redirects=True)
+    assert resp.status_code == 200
+    assert "doesn't exist or has expired".encode() in resp.data.replace(b"&#39;", b"'")
+
+
+def _stub_successful_scan(monkeypatch):
+    """Monkeypatches run_scan to a canned reachable result -- avoids a real
+    network call (and example.test/.test never resolves anyway) for tests
+    that just need *a* saved scan with a real scan_id to exercise routes
+    downstream of a successful /scan."""
+    from scanner import Finding, ScanResult
+
+    def fake_run_scan(target):
+        return ScanResult(
+            target=target, scanned_at="t",
+            findings=[Finding("hsts", "Missing HSTS header", "high", "detail", "fix")],
+            reachable=True, error=None,
+        )
+
+    monkeypatch.setattr(app_module, "run_scan", fake_run_scan)
+
+
+def test_report_pdf_returns_pdf_bytes_on_success(client, monkeypatch):
+    _stub_successful_scan(monkeypatch)
+    resp = client.post("/scan", data={"target": "https://example.test"})
+    import re
+    m = re.search(rb'/report/([\w-]+)/pdf', resp.data)
+    assert m, "expected a Download PDF link with a scan_id on the report page"
+    scan_id = m.group(1).decode()
+
+    monkeypatch.setattr(app_module.pdf_export, "render_pdf", lambda html: b"%PDF-fake-bytes")
+    resp = client.get(f"/report/{scan_id}/pdf")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/pdf"
+    assert f"siteguard-report-{scan_id}.pdf" in resp.headers["Content-Disposition"]
+    assert resp.data == b"%PDF-fake-bytes"
+
+
+def test_report_pdf_flashes_and_redirects_when_render_fails(client, monkeypatch):
+    _stub_successful_scan(monkeypatch)
+    resp = client.post("/scan", data={"target": "https://example.test"})
+    import re
+    m = re.search(rb'/report/([\w-]+)/pdf', resp.data)
+    scan_id = m.group(1).decode()
+
+    monkeypatch.setattr(app_module.pdf_export, "render_pdf", lambda html: None)
+    resp = client.get(f"/report/{scan_id}/pdf", follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"Couldn&#39;t generate a PDF" in resp.data or b"Couldn't generate a PDF" in resp.data
 
 
 def test_batch_empty_targets_flashes(client):
@@ -111,6 +165,92 @@ def test_lead_appears_in_admin_dashboard(client, monkeypatch):
     resp = client.get("/admin")
     assert b"prospect@test.com" in resp.data
     assert b"Leads (1)" in resp.data
+
+
+# --- Report email on lead capture --------------------------------------------
+
+def test_lead_without_scan_id_does_not_start_an_email_thread(client, monkeypatch):
+    """No scan_id (e.g. an old bookmarked report, or the field stripped) --
+    nothing to email, and the lead-capture flow must still work exactly as
+    before this feature existed."""
+    started = []
+    monkeypatch.setattr(app_module.threading, "Thread",
+                         lambda *a, **k: started.append(1) or MagicMock())
+
+    resp = client.post("/lead", data={
+        "email": "prospect@test.com", "target": "https://example.test",
+        "grade": "C", "score": "63",
+    }, follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"reach out with a fix plan shortly" in resp.data
+    assert started == []
+
+
+def test_lead_with_scan_id_starts_a_background_email_thread(client, monkeypatch):
+    fake_thread = MagicMock()
+    thread_calls = []
+
+    def fake_thread_ctor(*args, **kwargs):
+        thread_calls.append((args, kwargs))
+        return fake_thread
+
+    monkeypatch.setattr(app_module.threading, "Thread", fake_thread_ctor)
+
+    resp = client.post("/lead", data={
+        "email": "prospect@test.com", "target": "https://example.test",
+        "grade": "C", "score": "63", "scan_id": "abc123",
+    }, follow_redirects=True)
+
+    assert resp.status_code == 200
+    assert b"reach out with a fix plan shortly" in resp.data
+    assert len(thread_calls) == 1
+    kwargs = thread_calls[0][1]
+    assert kwargs["target"] == app_module._send_report_email_background
+    assert kwargs["args"][0] == "prospect@test.com"
+    assert kwargs["args"][1] == "abc123"
+    fake_thread.start.assert_called_once()
+
+
+def test_send_report_email_background_calls_emailer_with_pdf(monkeypatch):
+    """Direct unit test of the background function itself (run
+    synchronously here, not via a real thread) -- covers the
+    app.app_context()-wrapped render_template call and the handoff to
+    pdf_export + emailer."""
+    from scanner import Finding, ScanResult
+
+    result = ScanResult(
+        target="https://example.test", scanned_at="t",
+        findings=[Finding("hsts", "Missing HSTS header", "high", "detail", "fix")],
+        reachable=True, error=None,
+    )
+    monkeypatch.setattr(app_module, "load_scan", lambda scan_id: (result, "summary text", "rule-based"))
+    monkeypatch.setattr(app_module.pdf_export, "render_pdf", lambda html: b"%PDF-fake")
+
+    sent = {}
+    monkeypatch.setattr(
+        app_module.emailer, "send_report_email",
+        lambda to_email, target, grade, score, report_url, pdf_bytes=None:
+            sent.update(to=to_email, target=target, grade=grade, score=score,
+                        report_url=report_url, pdf_bytes=pdf_bytes) or True,
+    )
+
+    app_module._send_report_email_background("lead@test.com", "abc123", "https://x.test/report/abc123")
+
+    assert sent["to"] == "lead@test.com"
+    assert sent["target"] == "https://example.test"
+    assert sent["pdf_bytes"] == b"%PDF-fake"
+    assert sent["report_url"] == "https://x.test/report/abc123"
+
+
+def test_send_report_email_background_swallows_errors(monkeypatch):
+    """Must never raise -- a bad SMTP config, a slow PDF render, whatever --
+    the lead-capture request that spawned this already returned to the
+    visitor and doesn't care."""
+    def boom(scan_id):
+        raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(app_module, "load_scan", boom)
+    app_module._send_report_email_background("lead@test.com", "abc123", "https://x.test/report/abc123")
 
 
 # --- Gated active-testing mode -----------------------------------------------

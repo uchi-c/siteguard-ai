@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass  # fine to skip -- just export env vars directly instead
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf import CSRFProtect
@@ -39,6 +39,8 @@ from storage import (
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 import active_scan_job
+import pdf_export
+import emailer
 import payload_classifier
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
@@ -147,6 +149,30 @@ def view_report(scan_id):
         target=result.target,
         top_finding=top_finding,
         scan_id=scan_id,
+    )
+
+
+@app.route("/report/<scan_id>/pdf", methods=["GET"])
+@limiter.limit("20 per hour")
+def report_pdf(scan_id):
+    loaded = load_scan(scan_id)
+    if not loaded:
+        flash("That report link doesn't exist or has expired.")
+        return redirect(url_for("index"))
+
+    result, narrative, source = loaded
+    html = render_template(
+        "report_print.html", result=result, narrative=narrative,
+        narrative_source=source, counts=result.counts(),
+    )
+    pdf_bytes = pdf_export.render_pdf(html)
+    if not pdf_bytes:
+        flash("Couldn't generate a PDF right now -- try again in a moment.")
+        return redirect(url_for("view_report", scan_id=scan_id))
+
+    return Response(
+        pdf_bytes, mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="siteguard-report-{scan_id}.pdf"'},
     )
 
 
@@ -347,14 +373,44 @@ def csrf_error_handler(e):
     return redirect(url_for("index"))
 
 
+def _send_report_email_background(to_email: str, scan_id: str, report_url: str) -> None:
+    """Renders the PDF and sends the report email on a background thread --
+    PDF rendering shells out to headless Chromium (see pdf_export.py) and
+    can take a few real seconds, which has no business blocking the lead-
+    capture request that already logged the lead and is the part that
+    actually matters. Never raises -- a bad SMTP config, a slow/failed PDF
+    render, or a network hiccup should never surface anywhere; the lead is
+    already saved regardless of whether this succeeds."""
+    try:
+        loaded = load_scan(scan_id)
+        if not loaded:
+            return
+        result, narrative, source = loaded
+        with app.app_context():
+            html = render_template(
+                "report_print.html", result=result, narrative=narrative,
+                narrative_source=source, counts=result.counts(),
+            )
+        pdf_bytes = pdf_export.render_pdf(html)
+        emailer.send_report_email(to_email, result.target, result.grade, result.score, report_url, pdf_bytes)
+    except Exception:
+        pass
+
+
 @app.route("/lead", methods=["POST"])
 def lead():
     email = (request.form.get("email") or "").strip()
     target = request.form.get("target", "")
     grade = request.form.get("grade", "")
     score = request.form.get("score", "0")
+    scan_id = request.form.get("scan_id", "")
     if email:
         _log_lead(email, target, grade, int(score) if score.isdigit() else 0)
+        if scan_id:
+            report_url = url_for("view_report", scan_id=scan_id, _external=True)
+            threading.Thread(
+                target=_send_report_email_background, args=(email, scan_id, report_url), daemon=True,
+            ).start()
         flash("Got it -- we'll reach out with a fix plan shortly.")
     return redirect(url_for("index"))
 

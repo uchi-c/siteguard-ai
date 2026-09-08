@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Security Assessment &mdash; {{ result.target }}</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #ffffff;
+    color: #1a2233;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    line-height: 1.5;
+    font-size: 13px;
+  }
+  .sheet { padding: 6mm 2mm; }
+
+  .letterhead {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding-bottom: 16px; margin-bottom: 24px; border-bottom: 3px solid #0b0f14;
+  }
+  .letterhead .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18px; letter-spacing: -0.02em; }
+  .letterhead .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: #1fb87a; }
+  .letterhead .brand-sub { color: #5b6b80; font-size: 11.5px; margin-top: 3px; }
+  .letterhead .meta { text-align: right; font-size: 11.5px; color: #5b6b80; }
+  .letterhead .meta strong { color: #1a2233; }
+
+  .hero {
+    display: flex; align-items: center; gap: 24px;
+    background: #f4f6f9; border: 1px solid #e2e7ee; border-radius: 14px;
+    padding: 22px 26px; margin-bottom: 24px;
+  }
+  .grade-badge {
+    flex: 0 0 auto; width: 78px; height: 78px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 34px; font-weight: 800; color: #fff;
+    background: {% if result.grade in ['A','B'] %}#1fb87a{% elif result.grade == 'C' %}#d6a415{% else %}#e2504a{% endif %};
+  }
+  .hero-text { flex: 1; }
+  .hero-text .target { font-size: 15px; font-weight: 700; word-break: break-all; }
+  .hero-text .score { color: #5b6b80; font-size: 12.5px; margin-top: 2px; }
+  .hero-counts { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .count-pill { font-size: 11px; padding: 3px 10px; border-radius: 20px; background: #fff; border: 1px solid #e2e7ee; }
+  .count-pill b { font-variant-numeric: tabular-nums; }
+  .c-critical { color: #b8302b; } .c-high { color: #b5651d; } .c-medium { color: #8a6d00; } .c-low { color: #2a5fa5; }
+
+  .section-label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .09em;
+    color: #5b6b80; font-weight: 700; margin: 0 0 10px;
+  }
+  .panel { border: 1px solid #e2e7ee; border-radius: 12px; padding: 18px 20px; margin-bottom: 20px; }
+  .summary-text { white-space: pre-line; font-size: 12.5px; color: #29344a; }
+
+  .finding { padding: 12px 0; border-top: 1px solid #eef1f5; page-break-inside: avoid; }
+  .finding:first-child { border-top: none; padding-top: 0; }
+  .finding-head { display: flex; justify-content: space-between; gap: 10px; }
+  .finding-title { font-size: 12.5px; font-weight: 700; }
+  .sev-tag {
+    font-size: 9.5px; text-transform: uppercase; font-weight: 800; white-space: nowrap;
+    padding: 2px 8px; border-radius: 20px; height: fit-content;
+  }
+  .sev-critical { background: #fdecea; color: #b8302b; }
+  .sev-high { background: #fdf0e4; color: #b5651d; }
+  .sev-medium { background: #fdf6dc; color: #8a6d00; }
+  .sev-low { background: #eaf1fb; color: #2a5fa5; }
+  .sev-info { background: #eef1f5; color: #5b6b80; }
+  .finding-owasp { color: #8b97a8; font-size: 10.5px; margin-top: 3px; }
+  .finding-detail { font-size: 11.5px; color: #384258; margin: 5px 0 0; }
+  .finding-fix { font-size: 11.5px; margin: 4px 0 0; }
+  .finding-fix b { color: #1fb87a; }
+
+  .footer {
+    margin-top: 28px; padding-top: 14px; border-top: 1px solid #e2e7ee;
+    font-size: 10px; color: #8b97a8; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="letterhead">
+    <div>
+      <div class="brand"><span class="dot"></span>SiteGuard AI</div>
+      <div class="brand-sub">Website Security Assessment Report</div>
+    </div>
+    <div class="meta">
+      <div>Scanned: <strong>{{ result.scanned_at }}</strong></div>
+      <div>Target: <strong>{{ result.target }}</strong></div>
+    </div>
+  </div>
+
+  <div class="hero">
+    <div class="grade-badge">{{ result.grade }}</div>
+    <div class="hero-text">
+      <div class="target">{{ result.target }}</div>
+      <div class="score">Security score: {{ result.score }}/100</div>
+      <div class="hero-counts">
+        <span class="count-pill c-critical"><b>{{ counts.critical }}</b> critical</span>
+        <span class="count-pill c-high"><b>{{ counts.high }}</b> high</span>
+        <span class="count-pill c-medium"><b>{{ counts.medium }}</b> medium</span>
+        <span class="count-pill c-low"><b>{{ counts.low }}</b> low</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-label">{{ "AI-written summary" if narrative_source == "ai" else "Summary" }}</div>
+    <div class="summary-text">{{ narrative }}</div>
+  </div>
+
+  {% if result.findings %}
+  <div class="panel">
+    <div class="section-label">Full findings ({{ result.findings|length }})</div>
+    {% for f in result.findings %}
+    <div class="finding">
+      <div class="finding-head">
+        <div class="finding-title">{{ f.title }}</div>
+        <span class="sev-tag sev-{{ f.severity }}">{{ f.severity }}</span>
+      </div>
+      {% if f.owasp %}
+      <div class="finding-owasp">OWASP: {{ f.owasp }}</div>
+      {% endif %}
+      <p class="finding-detail">{{ f.detail }}</p>
+      <p class="finding-fix"><b>Fix:</b> {{ f.recommendation }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="footer">
+    Generated by SiteGuard AI &mdash; passive, non-intrusive checks only.
+    Prepared for authorized use on {{ result.target }}. Not a substitute for a full manual penetration test.
+  </div>
+
+</div>
+</body>
+</html>

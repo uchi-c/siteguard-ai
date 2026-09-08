@@ -10,13 +10,18 @@
   </div>
 {% else %}
 
-  <div class="card" style="text-align:center;">
-    <div class="muted" style="font-size:14px;">{{ result.target }}</div>
-    <div style="font-size:64px; font-weight:800; line-height:1; margin:10px 0;
-      color: {% if result.grade in ['A','B'] %}var(--accent){% elif result.grade == 'C' %}var(--medium){% else %}var(--critical){% endif %};">
-      {{ result.grade }}
+  <div class="card grade-hero">
+    <div class="muted" style="font-size:14px; word-break:break-all;">{{ result.target }}</div>
+
+    {% set grade_var = 'accent' if result.grade in ['A','B'] else ('medium' if result.grade == 'C' else 'critical') %}
+    <div class="grade-ring" style="--ring-color: var(--{{ grade_var }});">
+      <span>{{ result.grade }}</span>
     </div>
-    <div class="muted">Security score: {{ result.score }}/100</div>
+    <div class="muted">Security score: <strong style="color:var(--text);">{{ result.score }}</strong>/100</div>
+
+    <div class="score-bar">
+      <div class="score-bar-fill" style="width:{{ result.score }}%; background:var(--{{ grade_var }});"></div>
+    </div>
 
     <div style="display:flex; gap:10px; justify-content:center; margin-top:20px; flex-wrap:wrap;">
       <span class="pill"><strong style="color:var(--critical);">{{ counts.critical }}</strong> critical</span>
@@ -26,10 +31,13 @@
     </div>
 
     {% if scan_id %}
-    <div class="muted" style="font-size:12.5px; margin-top:18px; word-break:break-all;">
+    <div class="muted" style="font-size:12.5px; margin-top:20px; word-break:break-all;">
       Shareable link: <a id="share-link-text" href="{{ request.host_url.rstrip('/') }}{{ url_for('view_report', scan_id=scan_id) }}">{{ request.host_url.rstrip('/') }}{{ url_for('view_report', scan_id=scan_id) }}</a>
-      <button type="button" id="share-copy" class="btn-secondary"
-        style="width:auto; padding:4px 10px; font-size:12px; font-weight:600; margin-left:6px; border-radius:8px;">Copy link</button>
+    </div>
+    <div style="display:flex; gap:8px; justify-content:center; margin-top:12px; flex-wrap:wrap;">
+      <button type="button" id="share-copy" class="btn-secondary btn-sm">Copy link</button>
+      <a class="btn-secondary btn-sm" style="text-decoration:none; display:inline-block;"
+        href="{{ url_for('report_pdf', scan_id=scan_id) }}">Download PDF</a>
     </div>
     {% endif %}
   </div>
@@ -78,6 +86,7 @@
       <input type="hidden" name="target" value="{{ result.target }}">
       <input type="hidden" name="grade" value="{{ result.grade }}">
       <input type="hidden" name="score" value="{{ result.score }}">
+      <input type="hidden" name="scan_id" value="{{ scan_id or '' }}">
       <input type="email" name="email" placeholder="you@company.com" required>
       <div style="height:14px;"></div>
       <button type="submit">Send me the fix plan</button>
