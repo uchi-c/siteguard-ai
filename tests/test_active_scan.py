@@ -26,6 +26,31 @@ def test_discover_injection_points_finds_link_and_form_params(vulnerable_target_
     assert "term" in params
 
 
+def test_discovery_falls_back_to_js_rendering_when_html_crawl_finds_nothing(monkeypatch, allow_private):
+    """Regression test for the SPA discovery gap (surfaced against a real
+    site, uruu.enterprises): a page with zero forms/query-string links in
+    its raw HTML must trigger the headless-browser fallback rather than
+    silently reporting 0 injection points."""
+    monkeypatch.setattr(active_scan, "discover_injection_points_js",
+                         lambda base_url: [{"url": base_url + "/api/signup", "param": "email"}])
+
+    # An unreachable target means the raw-HTML crawl finds nothing on its own.
+    points = active_scan._discover_injection_points("http://127.0.0.1:1/spa-like")
+    assert points == [{"url": "http://127.0.0.1:1/spa-like/api/signup", "param": "email"}]
+
+
+def test_discovery_skips_js_fallback_when_html_crawl_finds_points(monkeypatch, wordpress_like_target_url):
+    """The (much more expensive) JS fallback should never run when the fast
+    regex crawl already found real points."""
+    calls = []
+    monkeypatch.setattr(active_scan, "discover_injection_points_js",
+                         lambda base_url: calls.append(base_url) or [])
+
+    points = active_scan._discover_injection_points(wordpress_like_target_url)
+    assert points  # the wordpress fixture's search form should still be found
+    assert calls == []
+
+
 def test_run_active_scan_detects_reflected_xss(vulnerable_scan_result):
     xss = [f for f in vulnerable_scan_result.findings if f.check == "reflected-xss"]
     assert any("'q'" in f.title for f in xss) or any("q" in f.location for f in xss)

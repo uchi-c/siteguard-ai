@@ -234,6 +234,36 @@ def wordpress_like_target_url():
     srv.shutdown()
 
 
+@pytest.fixture(scope="session")
+def js_spa_target_url():
+    """A minimal SPA-style page whose form only exists in the DOM after
+    client-side JS runs -- the raw HTML response has none, matching real
+    React/Vue/Next.js sites (this is what surfaced the gap against a real
+    site, uruu.enterprises). Regression target for js_discovery.py: the
+    regex-based crawl in active_scan.py finds 0 points here on its own; the
+    headless-browser fallback should find the real one once it renders."""
+    from flask import Flask, request as flask_request
+
+    spa = Flask("js_spa_test_target")
+
+    @spa.route("/")
+    def home():
+        return ('<html><body><div id="root"></div><script>'
+                'document.getElementById("root").innerHTML = '
+                '\'<form method="get" action="/search"><input name="q"></form>\';'
+                '</script></body></html>')
+
+    @spa.route("/search")
+    def search():
+        q = flask_request.args.get("q", "")
+        return f"<html><body>Results: {q}</body></html>"
+
+    srv = _ServerThread(spa)
+    srv.start()
+    yield f"http://127.0.0.1:{srv.port}"
+    srv.shutdown()
+
+
 @pytest.fixture
 def allow_private(monkeypatch):
     """Lets the SSRF guard through for tests that deliberately scan 127.0.0.1."""

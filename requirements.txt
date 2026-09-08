@@ -14,3 +14,14 @@ python-dotenv>=1.0
 # to look first.
 scikit-learn>=1.4
 joblib>=1.3
+
+# For active-scan's SPA-discovery fallback (see js_discovery.py): headless
+# Chromium rendering, used only when the fast regex-based HTML crawl finds
+# zero forms/links to test -- typically a React/Vue/Next.js-style site
+# whose real forms only exist after client-side JS runs. Heavy (~150-300MB
+# installed Chromium binary, real runtime memory use on top of Flask +
+# scikit-learn); turn it off with ACTIVE_SCAN_JS_DISCOVERY=0 if that's too
+# much for the host's memory budget. Needs its browser binary installed
+# separately -- `playwright install chromium` -- which render.yaml's
+# buildCommand does automatically on deploy.
+playwright>=1.40

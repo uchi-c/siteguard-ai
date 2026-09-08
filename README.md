@@ -63,6 +63,21 @@ links (`?ver=1.2.3` cache-busters on `.css`/`.js`/images/fonts) entirely —
 those are never real inputs and would otherwise crowd out the handful of
 parameters actually worth testing on a busy page.
 
+That crawl is a plain regex parse of the raw HTML response, so it finds
+nothing on a React/Vue/Next.js-style site whose real forms only exist after
+client-side JS runs — a real gap, not a bug, first noticed scanning
+[uruu.enterprises](https://uruu.enterprises) itself (0 forms, 0
+query-string links in the raw HTML, even though the real signup form is
+right there once the page renders). When the raw-HTML crawl finds nothing
+at all, discovery falls back to rendering the page in headless Chromium
+(`js_discovery.py`) before giving up. That fallback runs as its own
+subprocess (`js_discovery_worker.py`), not a thread in the main app, so a
+browser crash or timeout can't take the site down with it — any failure
+there (Playwright/Chromium not installed, launch failure, timeout) just
+means "found nothing," same as before this existed. Turn it off with
+`ACTIVE_SCAN_JS_DISCOVERY=0` if headless Chromium turns out to be too much
+for the host's memory budget on top of everything else already running.
+
 With up to 6 checks run against every discovered input, a full run can take
 a few minutes on a busy page -- too long to hold a single HTTP request open
 (and past gunicorn's default worker timeout). Like `/batch`, it runs on a
@@ -163,6 +178,10 @@ rule-based fallback path.
   tracks its progress in memory, the same pattern `batch.py` uses, so the
   request that kicks it off can return immediately instead of blocking for
   minutes.
+- `js_discovery.py` / `js_discovery_worker.py` — active-scan's headless-
+  Chromium discovery fallback for JS-rendered sites (see above). The worker
+  does the actual rendering as its own subprocess; `js_discovery.py` just
+  spawns it and turns any failure into "found nothing."
 - `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`

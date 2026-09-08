@@ -10,6 +10,12 @@ ever runs a harmless `echo <marker>`, never a destructive or data-reading
 command). Same detection-only philosophy a professional DAST tool's scan
 phase uses.
 
+Discovery (_discover_injection_points) is a fast, dependency-free regex
+parse of the raw HTML. If that finds nothing at all, it falls back to
+rendering the page in headless Chromium (js_discovery.py) before giving up
+-- some sites (React/Vue/Next.js-style SPAs) render their real forms via
+client-side JS, invisible to a raw-HTML parse.
+
 This is fundamentally different from scanner.py's passive checks and is
 gated hard, at multiple independent layers (see app.py):
   - Only reachable via an authenticated /admin session.
@@ -37,6 +43,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 import requests
 
 from scanner import TIMEOUT, USER_AGENT, UnsafeTargetError, _normalize_url, _resolve_and_validate_host
+from js_discovery import discover_injection_points_js
 
 MAX_INJECTION_POINTS = 15
 
@@ -177,7 +184,15 @@ def _discover_injection_points(base_url: str) -> list[dict]:
             for param in parse_qs(parsed.query):
                 add(link, param)
 
-    return points[:MAX_INJECTION_POINTS]
+    capped = points[:MAX_INJECTION_POINTS]
+    if capped:
+        return capped
+
+    # Nothing in the raw HTML at all -- likely a JS-rendered SPA (React/
+    # Vue/Next.js-style) where the real forms only exist after client-side
+    # JS runs, invisible to the regex parse above (see js_discovery.py).
+    # Best-effort: never raises, just returns [] if it doesn't work out.
+    return discover_injection_points_js(base_url)[:MAX_INJECTION_POINTS]
 
 
 def _test_reflected_xss(point: dict) -> ActiveFinding | None:
