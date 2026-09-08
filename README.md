@@ -129,6 +129,26 @@ tool does. Capped far lower than GET discovery (`MAX_POST_INJECTION_POINTS
 = 3` in `active_scan.py`) for exactly that reason — every point here is a
 real side effect, repeated once per check, not an inert query string.
 
+A form with no `method` attribute at all is treated as POST-shaped, not
+HTML's spec-default GET — found on a real site (alardio.com's `/register`:
+real, named `email`/`password` fields, no `method` or `action` at all,
+submission handled entirely by JS). A form with a password field and no
+visible method is far more likely to be a React/Vue-style form than
+someone actually relying on the GET default.
+
+Two real-world limits worth knowing about, hit testing this against
+uruu.enterprises and alardio.com: (1) a form that only renders after a
+button click (not present on initial page load, even after JS settles)
+is invisible to discovery, which never clicks anything — it only reads
+whatever's already in the DOM; (2) fields with no `name` attribute at all
+(pure React-controlled state, common when submission goes through a JS
+`fetch()` call rather than native form submission) can't be discovered or
+targeted by name, regardless of method. Neither is a bug to chase —
+closing either gap would mean simulating real user interaction and
+possibly defeating anti-bot protections (uruu.enterprises's signup form
+sits behind a Cloudflare Turnstile CAPTCHA), which is out of scope for a
+detection-only tool.
+
 ### Payload classifier (`/admin/classify`)
 
 A small trained ML model — TF-IDF character n-grams + logistic regression,

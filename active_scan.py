@@ -171,7 +171,15 @@ def _discover_post_points(base_url: str, html: str) -> list[dict]:
     discovered value rather than a placeholder -- overwriting one would
     likely just get the whole submission rejected before any check could
     run. Only non-hidden, non-checkbox/radio/file-type fields are
-    considered as things to actually test."""
+    considered as things to actually test.
+
+    Claims any form that isn't EXPLICITLY method="get", including forms
+    with no method attribute at all -- found in the wild (alardio.com's
+    /register) with real, named fields but no method/action, submission
+    handled entirely by JS. HTML's spec default for an omitted method is
+    GET, but a form with a password field and no visible method attribute
+    is far more likely to be a React/Vue-style form than someone actually
+    relying on that default, so it's treated as POST-shaped here."""
     points = []
     seen = set()
 
@@ -186,8 +194,8 @@ def _discover_post_points(base_url: str, html: str) -> list[dict]:
             break
         form_html = form_match.group(0)
         method_match = re.search(r'method=["\']([^"\']*)["\']', form_html, re.I)
-        if not method_match or method_match.group(1).lower() != "post":
-            continue
+        if method_match and method_match.group(1).lower() == "get":
+            continue  # explicit GET -- already covered by the GET crawler above
         action_match = re.search(r'action=["\']([^"\']*)["\']', form_html, re.I)
         action = urljoin(base_url, action_match.group(1)) if action_match else base_url
 
@@ -251,8 +259,16 @@ def _discover_injection_points(base_url: str, test_post_forms: bool = False) -> 
         for form_match in re.finditer(r"<form\b[^>]*>(.*?)</form>", r.text, re.I | re.S):
             form_html = form_match.group(0)
             method_match = re.search(r'method=["\']([^"\']*)["\']', form_html, re.I)
-            if method_match and method_match.group(1).lower() != "get":
-                continue  # skip POST forms -- don't submit unknown data to them
+            if not method_match or method_match.group(1).lower() != "get":
+                # Skip anything not EXPLICITLY method="get" -- a form with no
+                # method attribute at all is at least as likely to be a
+                # React/Vue-style form submitted via JS fetch() as a genuine
+                # HTML-default-GET form (very common: real, named fields,
+                # but the method/action attributes are vestigial since JS
+                # handles submission). Testing it here via query-string
+                # manipulation would just hit the wrong code path -- see
+                # _discover_post_points, which now claims this case instead.
+                continue
             action_match = re.search(r'action=["\']([^"\']*)["\']', form_html, re.I)
             action = urljoin(base_url, action_match.group(1)) if action_match else base_url
             for input_match in re.finditer(r'<input\b[^>]*name=["\']([^"\']+)["\']', form_html, re.I):

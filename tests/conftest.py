@@ -277,6 +277,40 @@ def vulnerable_post_target_url():
 
 
 @pytest.fixture(scope="session")
+def vulnerable_no_method_post_target_url():
+    """Regression fixture for a real site found in the wild
+    (alardio.com's /register): a form with real, named fields but NO
+    method or action attribute at all -- common on React/Vue-style pages
+    where JS handles submission and the HTML attributes are vestigial.
+    HTML's spec default for an omitted method is GET, but treating a form
+    like this as GET-eligible tests the wrong thing entirely (query-string
+    manipulation against a page whose real submission never looks at the
+    query string). Must be claimed by POST discovery instead."""
+    from flask import Flask, request as flask_request
+
+    vuln = Flask("vulnerable_no_method_test_target")
+
+    @vuln.route("/")
+    def home():
+        return ('<html><body>'
+                '<form>'
+                '<input type="text" name="email">'
+                '<input type="submit" value="Register">'
+                '</form>'
+                '</body></html>')
+
+    @vuln.route("/", methods=["POST"])
+    def home_post():
+        email = flask_request.form.get("email", "")
+        return f"<html><body>Registered: {email}</body></html>"
+
+    srv = _ServerThread(vuln)
+    srv.start()
+    yield f"http://127.0.0.1:{srv.port}"
+    srv.shutdown()
+
+
+@pytest.fixture(scope="session")
 def js_spa_target_url():
     """A minimal SPA-style page whose form only exists in the DOM after
     client-side JS runs -- the raw HTML response has none, matching real

@@ -51,9 +51,13 @@ def _extract_points(page, base_url: str) -> list[dict]:
             points.append({"url": url, "param": param})
 
     for form in page.query_selector_all("form"):
-        method = (form.get_attribute("method") or "get").lower()
-        if method != "get":
-            continue  # skip POST forms -- don't submit unknown data to them
+        method = form.get_attribute("method")
+        if not method or method.lower() != "get":
+            # Skip anything not EXPLICITLY method="get" -- see
+            # _extract_post_points below for why a missing method
+            # attribute is treated as POST-shaped rather than the HTML
+            # spec's GET default.
+            continue
         action = urljoin(base_url, form.get_attribute("action") or base_url)
         for input_el in form.query_selector_all("input[name]"):
             name = input_el.get_attribute("name")
@@ -97,6 +101,13 @@ def _field_placeholder(name: str, input_type: str) -> str:
 
 
 def _extract_post_points(page, base_url: str) -> list[dict]:
+    """Claims any form that isn't EXPLICITLY method="get", including forms
+    with no method attribute at all -- found in the wild (alardio.com's
+    /register) with real, named fields but no method/action, submission
+    handled entirely by JS. HTML's spec default for an omitted method is
+    GET, but a form with a password field and no visible method attribute
+    is far more likely to be a React/Vue-style form than someone actually
+    relying on that default, so it's treated as POST-shaped here."""
     points: list[dict] = []
     seen = set()
 
@@ -109,9 +120,9 @@ def _extract_post_points(page, base_url: str) -> list[dict]:
     for form in page.query_selector_all("form"):
         if len(points) >= MAX_POST_INJECTION_POINTS:
             break
-        method = (form.get_attribute("method") or "get").lower()
-        if method != "post":
-            continue
+        method = form.get_attribute("method")
+        if method and method.lower() == "get":
+            continue  # explicit GET -- already covered by _extract_points above
         action = urljoin(base_url, form.get_attribute("action") or base_url)
 
         testable = []

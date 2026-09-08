@@ -192,3 +192,46 @@ def test_run_active_scan_skips_post_form_by_default(vulnerable_post_target_url, 
     result = active_scan.run_active_scan(vulnerable_post_target_url)
     assert result.injection_points_tested == 0
     assert result.findings == []
+
+
+# --- Forms with no method attribute (real-world case: alardio.com/register) --
+
+def test_discover_post_points_claims_forms_with_no_method_attribute():
+    """A form with named fields but no method/action at all -- JS-driven
+    submission, found on a real site (alardio.com's /register). Must be
+    claimed as POST-shaped, not silently dropped."""
+    html = ('<form><input name="email" type="email">'
+            '<input name="password" type="password"></form>')
+    points = active_scan._discover_post_points("http://x.test/register", html)
+    params = {p["param"] for p in points}
+    assert params == {"email", "password"}
+    assert all(p["method"] == "post" for p in points)
+
+
+def test_discover_post_points_still_excludes_explicit_get_forms():
+    html = '<form method="get"><input name="q" type="text"></form>'
+    points = active_scan._discover_post_points("http://x.test/", html)
+    assert points == []
+
+
+def test_discover_injection_points_treats_no_method_form_as_post_only(
+    vulnerable_no_method_post_target_url, allow_private,
+):
+    """End-to-end: with POST testing off, a no-method form must contribute
+    NOTHING (not get misrouted into GET's query-string testing); with it
+    on, the field must show up as a POST point."""
+    get_only = active_scan._discover_injection_points(vulnerable_no_method_post_target_url)
+    assert get_only == []
+
+    with_post = active_scan._discover_injection_points(
+        vulnerable_no_method_post_target_url, test_post_forms=True,
+    )
+    assert any(p.get("method") == "post" and p["param"] == "email" for p in with_post)
+
+
+def test_run_active_scan_detects_xss_in_no_method_form_when_enabled(
+    vulnerable_no_method_post_target_url, allow_private,
+):
+    result = active_scan.run_active_scan(vulnerable_no_method_post_target_url, test_post_forms=True)
+    xss = [f for f in result.findings if f.check == "reflected-xss"]
+    assert xss, f"expected an XSS finding on the no-method form, got: {[(f.check, f.title) for f in result.findings]}"
