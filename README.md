@@ -299,29 +299,6 @@ the tracker. Once you have real volume, swap `storage.py`'s SQLite calls
 for a managed DB (Render's free Postgres tier works). Small edit, not a
 rebuild.
 
-## Using this as the actual side hustle (not just a demo)
-
-This connects to the plan from earlier: your edge is that you run a real
-cybersecurity company (Shadow Root) and can actually fix what this finds —
-most people running "AI agency" playbooks are selling something they can't
-deliver.
-
-1. **Payments.** Set up Payoneer now (Zambia-supported, works with Upwork/
-   Fiverr payouts) and a Wise multi-currency account for direct invoices
-   outside those platforms. Don't wait until you have a client to sort this.
-2. **The offer.** Free scan (this tool) → paid fixed-price remediation
-   (patch the specific findings) → optional monthly retainer (rescan +
-   monitor). Price the first remediation project, not an hourly rate — it's
-   easier to sell "$150 to fix these 6 things" than "$25/hr, trust me."
-3. **Distribution.** Deploy this, then send the *link* (not a cold pitch) to
-   small business owners/agencies — "I ran a free security scan on your
-   site, found a few things worth fixing, here's the report: [link]." That's
-   a warmer opener than generic outreach because it leads with concrete,
-   personalized proof of value instead of a claim.
-4. **Proof.** Scan your own sites and Shadow Root's first, screenshot a
-   clean "A" grade report, and use *that* in outreach as credibility — "here's
-   what a secure setup looks like, here's what yours currently shows."
-
 ## Legal/ethical note
 
 Every check here is passive (equivalent to a browser visiting a public page).
