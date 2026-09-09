@@ -47,9 +47,15 @@ background — each one gets a report link and a drafted outreach message,
 shown as they finish on a page that polls for progress.
 
 **`/admin`** is a password-gated view of every lead and recent scan, so you
-don't have to download `leads.csv` off the server to see who's converted.
-Set `ADMIN_PASSWORD` in `.env` to enable it — it's off (login fails
-outright) until you do.
+don't have to dig through the database to see who's converted. Set
+`ADMIN_PASSWORD` in `.env` to enable it — it's off (login fails outright)
+until you do. Each lead has an editable **status** (new / contacted /
+quoted / won / lost) and a notes field, saved right there in the table —
+enough of a lightweight pipeline to work leads from without a separate
+CRM. Leads live in `scans.db` now (a `leads` table, same DB as scans), not
+`leads.csv` — if you have an older deployment with real leads still only
+in `leads.csv`, the first `/admin` load after upgrading imports them in
+automatically (as status `new`), once.
 
 ### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
 
@@ -184,10 +190,11 @@ key it still produces a full graded report using the built-in rule-based
 narrative; add `ANTHROPIC_API_KEY` (from console.anthropic.com) to switch on
 the AI-written executive summary.
 
-Leads (email + scanned site + grade) are appended to `leads.csv` in this
-folder every time someone submits the "send me the fix plan" form. Every
-scan itself is saved to `scans.db` (SQLite) so its shareable link keeps
-working after the visitor leaves the page.
+Leads (email + scanned site + grade, plus an editable status/notes) are
+saved to `scans.db` (SQLite) every time someone submits the "send me the
+fix plan" form, viewable and workable from `/admin`. Every scan itself is
+also saved there so its shareable link keeps working after the visitor
+leaves the page.
 
 ## Running the tests
 
@@ -218,7 +225,9 @@ rule-based fallback path.
   or the API call fails, so the product never breaks in front of a prospect.
 - `app.py` — the Flask web app (form → scan → report → lead capture).
 - `storage.py` — saves each scan to `scans.db` (SQLite) and looks it back
-  up by ID for the `/report/<id>` shareable link.
+  up by ID for the `/report/<id>` shareable link; also saves leads with
+  an editable status/notes pair, and one-time-imports any pre-existing
+  `leads.csv` rows into it.
 - `batch.py` — runs a `/batch` job (multiple scans + outreach drafts) on a
   background thread so the request doesn't have to stay open for minutes;
   job state is in-memory only, so it resets on restart.
@@ -283,11 +292,12 @@ GitHub App has access to this repo (`github.com/settings/installations` →
 Render → Configure → add the repo) — without that, pushes need a manual
 deploy from the Render dashboard.
 
-`leads.csv` and `scans.db` both live on the host's filesystem, which on a
-free tier is ephemeral and can get wiped on redeploy — a shared scan link
-sent out right before a redeploy could go stale. Once you have real volume,
-swap `_log_lead()` in `app.py` and `storage.py` for a managed DB (Render's
-free Postgres tier works). Small edit, not a rebuild.
+`scans.db` lives on the host's filesystem, which on a free tier is
+ephemeral and can get wiped on redeploy — a shared scan link sent out
+right before a redeploy could go stale, and so could an unworked lead in
+the tracker. Once you have real volume, swap `storage.py`'s SQLite calls
+for a managed DB (Render's free Postgres tier works). Small edit, not a
+rebuild.
 
 ## Using this as the actual side hustle (not just a demo)
 

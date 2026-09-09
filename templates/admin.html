@@ -49,16 +49,33 @@
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>When (UTC)</th><th>Email</th><th>Site</th><th>Grade</th><th>Score</th></tr>
+        <tr><th>When (UTC)</th><th>Email</th><th>Site</th><th>Grade</th><th>Score</th><th>Status</th><th>Notes</th></tr>
       </thead>
       <tbody>
         {% for lead in leads %}
         <tr>
-          <td class="muted" style="white-space:nowrap;">{{ lead.timestamp_utc[:16].replace('T', ' ') }}</td>
+          <td class="muted" style="white-space:nowrap;">{{ lead.created_at[:16].replace('T', ' ') }}</td>
           <td style="word-break:break-all;">{{ lead.email }}</td>
           <td style="word-break:break-all;">{{ lead.target }}</td>
           <td>{{ lead.grade }}</td>
           <td>{{ lead.score }}</td>
+          <td colspan="2">
+            <form method="post" action="{{ url_for('update_lead_status', lead_id=lead.id) }}"
+              style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <select name="status" class="lead-status lead-status-{{ lead.status }}"
+                style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid var(--border);
+                background:var(--bg); color:var(--text); font-size:12.5px;">
+                {% for s in lead_statuses %}
+                <option value="{{ s }}" {% if s == lead.status %}selected{% endif %}>{{ s|capitalize }}</option>
+                {% endfor %}
+              </select>
+              <input type="text" name="notes" value="{{ lead.notes }}" placeholder="Notes"
+                style="width:140px; padding:5px 8px; font-size:12.5px; border-radius:8px;
+                border:1px solid var(--border); background:var(--bg); color:var(--text);">
+              <button type="submit" class="btn-secondary btn-sm">Save</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

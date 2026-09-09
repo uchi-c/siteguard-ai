@@ -1,13 +1,17 @@
 """
-Persists scan results so a report can be revisited via a shareable link
-(/report/<id>) instead of being thrown away after the first render.
+Persists scan results (so a report can be revisited via a shareable link,
+/report/<id>, instead of being thrown away after the first render) and
+leads (email + target + grade/score, plus an editable status/notes pair
+for working them as a pipeline -- new/contacted/quoted/won/lost).
 
-SQLite on local disk -- same durability tradeoff as leads.csv (wiped on a
-Render free-tier redeploy); fine for a link meant to stay useful for days
-or weeks after a scan, not permanent archival.
+SQLite on local disk -- ephemeral on a Render free-tier redeploy; fine for
+a link meant to stay useful for days or weeks, and for a lead list you'd
+want to export before any redeploy that might wipe it, not permanent
+archival.
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 import secrets
@@ -19,6 +23,8 @@ from datetime import datetime, timezone
 from scanner import Finding, ScanResult
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "scans.db")
+
+LEAD_STATUSES = ["new", "contacted", "quoted", "won", "lost"]
 
 
 def _connect():
@@ -39,7 +45,85 @@ def _connect():
         "target TEXT NOT NULL, "
         "hostname TEXT NOT NULL)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS leads ("
+        "id TEXT PRIMARY KEY, "
+        "created_at TEXT NOT NULL, "
+        "email TEXT NOT NULL, "
+        "target TEXT NOT NULL, "
+        "grade TEXT, "
+        "score INTEGER, "
+        "status TEXT NOT NULL DEFAULT 'new', "
+        "notes TEXT NOT NULL DEFAULT '')"
+    )
     return conn
+
+
+def save_lead(email: str, target: str, grade: str, score: int) -> str:
+    lead_id = secrets.token_urlsafe(8)
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO leads (id, created_at, email, target, grade, score, status, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'new', '')",
+            (lead_id, datetime.now(timezone.utc).isoformat(), email, target, grade, score),
+        )
+        conn.commit()
+    return lead_id
+
+
+def list_leads(limit: int = 200) -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, email, target, grade, score, status, notes "
+            "FROM leads ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [
+        {"id": r[0], "created_at": r[1], "email": r[2], "target": r[3],
+         "grade": r[4], "score": r[5], "status": r[6], "notes": r[7]}
+        for r in rows
+    ]
+
+
+def update_lead(lead_id: str, status: str, notes: str) -> bool:
+    if status not in LEAD_STATUSES:
+        raise ValueError(f"invalid status: {status!r}")
+    with closing(_connect()) as conn:
+        cur = conn.execute(
+            "UPDATE leads SET status = ?, notes = ? WHERE id = ?", (status, notes, lead_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def import_leads_csv_once(csv_path: str) -> int:
+    """One-time migration: leads used to live only in a flat leads.csv,
+    appended to but never updated. Now that leads are per-row SQLite
+    records with an editable status, this imports any existing CSV rows
+    into the leads table (as status='new') so history isn't lost --
+    but only if the table is still empty, so it never re-imports or
+    duplicates rows on later calls. Safe to call unconditionally at
+    startup."""
+    if not os.path.exists(csv_path):
+        return 0
+    with closing(_connect()) as conn:
+        already_migrated = conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0]
+        if already_migrated:
+            return 0
+        imported = 0
+        with open(csv_path, newline="") as f:
+            for row in csv.DictReader(f):
+                score_raw = row.get("score", "")
+                conn.execute(
+                    "INSERT INTO leads (id, created_at, email, target, grade, score, status, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'new', '')",
+                    (secrets.token_urlsafe(8), row.get("timestamp_utc", ""), row.get("email", ""),
+                     row.get("target", ""), row.get("grade", ""),
+                     int(score_raw) if score_raw.isdigit() else 0),
+                )
+                imported += 1
+        conn.commit()
+    return imported
 
 
 def log_active_scan_authorization(target: str, hostname: str) -> None:

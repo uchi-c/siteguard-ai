@@ -3,19 +3,19 @@ SiteGuard AI -- free AI-narrated security scan, used as a lead magnet.
 
 Flow: visitor enters their site URL -> gets a real passive security scan with
 an AI-written, plain-English executive summary and prioritized fix list ->
-CTA to book a paid remediation call. Leads are logged to leads.csv.
+CTA to book a paid remediation call. Leads are saved as per-lead records
+(storage.py) with an editable status (new/contacted/quoted/won/lost) so
+/admin doubles as a lightweight pipeline, not just a log.
 
 Run locally:
     export ANTHROPIC_API_KEY=sk-ant-...   # optional -- works without it
     python app.py
 Then open http://localhost:5000
 """
-import csv
 import hmac
 import os
 import secrets
 import threading
-from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import urlparse
 
@@ -36,6 +36,7 @@ from ai_narrative import generate_narrative, generate_outreach_message
 from storage import (
     save_scan, load_scan, list_recent_scans,
     log_active_scan_authorization, list_active_scan_audit,
+    save_lead, list_leads, update_lead, import_leads_csv_once, LEAD_STATUSES,
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 import active_scan_job
@@ -65,24 +66,12 @@ csrf = CSRFProtect(app)
 # runs with multiple gunicorn workers, since counts aren't shared across them.
 limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
 
+# Leads used to live only here, appended to but never updated. Now they're
+# per-row SQLite records (storage.py) with an editable status -- this path
+# is kept only so import_leads_csv_once can pull any pre-existing rows in
+# on first admin-dashboard load, so history from before this feature isn't
+# lost. Nothing writes to it anymore.
 LEADS_FILE = os.path.join(os.path.dirname(__file__), "leads.csv")
-
-
-def _log_lead(email: str, target: str, grade: str, score: int):
-    is_new = not os.path.exists(LEADS_FILE)
-    with open(LEADS_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        if is_new:
-            writer.writerow(["timestamp_utc", "email", "target", "grade", "score"])
-        writer.writerow([datetime.now(timezone.utc).isoformat(), email, target, grade, score])
-
-
-def _read_leads() -> list[dict]:
-    if not os.path.exists(LEADS_FILE):
-        return []
-    with open(LEADS_FILE, newline="") as f:
-        rows = list(csv.DictReader(f))
-    return list(reversed(rows))  # most recent first
 
 
 def admin_required(view):
@@ -269,12 +258,29 @@ def admin_logout():
 @app.route("/admin", methods=["GET"])
 @admin_required
 def admin_dashboard():
+    imported = import_leads_csv_once(LEADS_FILE)
+    if imported:
+        flash(f"Imported {imported} lead(s) from the old leads.csv into the new tracker.")
     return render_template(
         "admin.html",
-        leads=_read_leads(),
+        leads=list_leads(),
+        lead_statuses=LEAD_STATUSES,
         scans=list_recent_scans(),
         active_testing_enabled=ACTIVE_TESTING_ENABLED,
     )
+
+
+@app.route("/admin/leads/<lead_id>/status", methods=["POST"])
+@admin_required
+def update_lead_status(lead_id):
+    status = (request.form.get("status") or "").strip().lower()
+    notes = (request.form.get("notes") or "").strip()
+    if status not in LEAD_STATUSES:
+        flash("Unknown status.")
+        return redirect(url_for("admin_dashboard"))
+    if not update_lead(lead_id, status, notes):
+        flash("That lead doesn't exist -- it may predate the tracker or already be gone.")
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/active-scan", methods=["GET"])
@@ -408,7 +414,7 @@ def lead():
     score = request.form.get("score", "0")
     scan_id = request.form.get("scan_id", "")
     if email:
-        _log_lead(email, target, grade, int(score) if score.isdigit() else 0)
+        save_lead(email, target, grade, int(score) if score.isdigit() else 0)
         if scan_id:
             report_url = url_for("view_report", scan_id=scan_id, _external=True)
             threading.Thread(

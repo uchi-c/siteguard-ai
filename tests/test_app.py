@@ -168,6 +168,82 @@ def test_lead_appears_in_admin_dashboard(client, monkeypatch):
     assert b"Leads (1)" in resp.data
 
 
+# --- Lead status tracker -------------------------------------------------------
+
+def test_update_lead_status_requires_admin_login(client):
+    resp = client.post("/admin/leads/some-id/status", data={"status": "contacted"})
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_update_lead_status_changes_status_and_notes(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/lead", data={
+        "email": "prospect@test.com", "target": "https://example.test",
+        "grade": "C", "score": "63",
+    })
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    import storage
+    lead_id = storage.list_leads()[0]["id"]
+
+    resp = client.post(f"/admin/leads/{lead_id}/status", data={
+        "status": "contacted", "notes": "Called, left voicemail",
+    }, follow_redirects=True)
+
+    assert resp.status_code == 200
+    assert b"Contacted" in resp.data
+    assert b"Called, left voicemail" in resp.data
+
+
+def test_update_lead_status_rejects_unknown_status(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/lead", data={
+        "email": "prospect@test.com", "target": "https://example.test",
+        "grade": "C", "score": "63",
+    })
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    import storage
+    lead_id = storage.list_leads()[0]["id"]
+
+    resp = client.post(f"/admin/leads/{lead_id}/status", data={
+        "status": "definitely-not-real", "notes": "",
+    }, follow_redirects=True)
+    assert b"Unknown status" in resp.data
+    assert storage.list_leads()[0]["status"] == "new"  # unchanged
+
+
+def test_update_lead_status_unknown_id_flashes_and_redirects(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/leads/no-such-lead/status", data={
+        "status": "contacted", "notes": "",
+    }, follow_redirects=True)
+    assert "doesn&#39;t exist".encode() in resp.data or "doesn't exist".encode() in resp.data
+
+
+def test_admin_dashboard_imports_legacy_leads_csv_once(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    csv_path = tmp_path / "legacy-leads.csv"
+    csv_path.write_text(
+        "timestamp_utc,email,target,grade,score\n"
+        "2026-01-01T00:00:00+00:00,legacy@test.com,https://legacy.test,B,82\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_module, "LEADS_FILE", str(csv_path))
+
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.get("/admin", follow_redirects=True)
+
+    assert b"legacy@test.com" in resp.data
+    assert b"Imported 1 lead" in resp.data
+
+    # A second load must not re-import or duplicate.
+    resp2 = client.get("/admin")
+    assert resp2.data.count(b"legacy@test.com") == 1
+
+
 # --- Report email on lead capture --------------------------------------------
 
 def test_lead_without_scan_id_does_not_start_an_email_thread(client, monkeypatch):
