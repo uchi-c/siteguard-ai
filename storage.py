@@ -85,6 +85,19 @@ def list_leads(limit: int = 200) -> list[dict]:
     ]
 
 
+def get_lead(lead_id: str) -> dict | None:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT id, created_at, email, target, grade, score, status, notes "
+            "FROM leads WHERE id = ?",
+            (lead_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "created_at": row[1], "email": row[2], "target": row[3],
+            "grade": row[4], "score": row[5], "status": row[6], "notes": row[7]}
+
+
 def update_lead(lead_id: str, status: str, notes: str) -> bool:
     if status not in LEAD_STATUSES:
         raise ValueError(f"invalid status: {status!r}")

@@ -112,6 +112,61 @@ def generate_outreach_message(target: str, top_title: str, top_detail: str, has_
         return _rule_based_outreach(target, top_title, top_detail, has_findings), "rule-based"
 
 
+SYSTEM_PROMPT_FOLLOWUP = """You are a security consultant following up on a free security
+report you sent a prospect a little while ago -- they gave their email for it but haven't
+replied. Write ONE short, low-pressure follow-up message (40-70 words) they can copy-paste
+into an email or LinkedIn message.
+
+Reference the single most important finding in plain English (no jargon, no severity
+labels) as the reason you're checking back in. Acknowledge the time gap naturally without
+sounding passive-aggressive about the lack of reply. End with a low-key nudge (offering to
+answer questions, or a quick call) -- not a hard sell, not a discount, not urgency/scarcity
+language. No subject line, no greeting placeholder, no markdown, no signature. Just the
+message body as one paragraph."""
+
+
+def _rule_based_followup(target: str, top_title: str, days_since: int) -> str:
+    gap = "a few days ago" if days_since <= 5 else ("a couple weeks ago" if days_since <= 16 else "a while back")
+    if not top_title:
+        return (f"Hey -- just following up on the security report for {target} I sent over "
+                 f"{gap}. No rush at all, but happy to walk through it or answer any questions "
+                 f"whenever's useful.")
+    return (f"Hey -- following up on the security report for {target} from {gap}, specifically "
+             f"{top_title.lower()}. No pressure, just wanted to make sure it didn't get buried -- "
+             f"happy to walk through the fix or hop on a quick call if useful.")
+
+
+def generate_followup_message(target: str, top_title: str, top_detail: str, days_since: int) -> tuple[str, str]:
+    """Returns (message_text, source) where source is 'ai' or 'rule-based'. Same
+    shape as generate_outreach_message -- this is the same idea (a short,
+    low-pressure nudge), just for a lead who already gave their email
+    instead of a cold-outreach opener."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return _rule_based_followup(target, top_title, days_since), "rule-based"
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        user_content = (
+            f"Site: {target}\n"
+            f"Days since the report was sent: {days_since}\n"
+            + (f"Top finding: {top_title} -- {top_detail}" if top_title else "No issues found.")
+        )
+        message = client.messages.create(
+            model=MODEL,
+            max_tokens=200,
+            system=SYSTEM_PROMPT_FOLLOWUP,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = "".join(block.text for block in message.content if hasattr(block, "text")).strip()
+        if text:
+            return text, "ai"
+        return _rule_based_followup(target, top_title, days_since), "rule-based"
+    except Exception:
+        return _rule_based_followup(target, top_title, days_since), "rule-based"
+
+
 def generate_narrative(result: ScanResult) -> tuple[str, str]:
     """Returns (narrative_text, source) where source is 'ai' or 'rule-based'."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")

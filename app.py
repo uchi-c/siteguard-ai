@@ -16,6 +16,7 @@ import hmac
 import os
 import secrets
 import threading
+from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import urlparse
 
@@ -32,11 +33,11 @@ from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError
 
 from scanner import run_scan, _normalize_url
-from ai_narrative import generate_narrative, generate_outreach_message
+from ai_narrative import generate_narrative, generate_outreach_message, generate_followup_message
 from storage import (
     save_scan, load_scan, list_recent_scans,
     log_active_scan_authorization, list_active_scan_audit,
-    save_lead, list_leads, update_lead, import_leads_csv_once, LEAD_STATUSES,
+    save_lead, list_leads, get_lead, update_lead, import_leads_csv_once, LEAD_STATUSES,
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 import active_scan_job
@@ -281,6 +282,42 @@ def update_lead_status(lead_id):
     if not update_lead(lead_id, status, notes):
         flash("That lead doesn't exist -- it may predate the tracker or already be gone.")
     return redirect(url_for("admin_dashboard"))
+
+
+def _days_since(iso_timestamp: str) -> int:
+    then = datetime.fromisoformat(iso_timestamp)
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return max(0, (datetime.now(timezone.utc) - then).days)
+
+
+@app.route("/admin/leads/<lead_id>/draft-followup", methods=["POST"])
+@admin_required
+@limiter.limit("20 per minute")
+def draft_lead_followup(lead_id):
+    lead = get_lead(lead_id)
+    if not lead:
+        return {"error": "Lead not found."}, 404
+
+    # Best-effort match to the scan that likely produced this lead -- leads
+    # aren't linked to a specific scan_id (see storage.py), so this takes
+    # the most recent scan of the same target, which is right in the
+    # overwhelming majority of cases (a prospect rarely gets rescanned
+    # between submitting their email and a follow-up going out).
+    top_title, top_detail = "", ""
+    for s in list_recent_scans():
+        if s["target"] == lead["target"]:
+            loaded = load_scan(s["id"])
+            if loaded:
+                result, _, _ = loaded
+                if result.findings:
+                    top = max(result.findings, key=lambda f: SEVERITY_RANK[f.severity])
+                    top_title, top_detail = top.title, top.detail
+            break
+
+    days_since = _days_since(lead["created_at"])
+    message, source = generate_followup_message(lead["target"], top_title, top_detail, days_since)
+    return {"message": message, "source": source}
 
 
 @app.route("/admin/active-scan", methods=["GET"])

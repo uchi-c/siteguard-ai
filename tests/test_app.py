@@ -241,7 +241,75 @@ def test_admin_dashboard_imports_legacy_leads_csv_once(client, monkeypatch, tmp_
 
     # A second load must not re-import or duplicate.
     resp2 = client.get("/admin")
-    assert resp2.data.count(b"legacy@test.com") == 1
+    assert b"Leads (1)" in resp2.data
+
+
+# --- Lead follow-up drafting (agentic: Claude drafts, operator sends) --------
+
+def test_draft_lead_followup_requires_admin_login(client):
+    resp = client.post("/admin/leads/some-id/draft-followup")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_draft_lead_followup_unknown_lead_returns_404(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/leads/no-such-lead/draft-followup")
+    assert resp.status_code == 404
+    assert resp.get_json()["error"]
+
+
+def test_draft_lead_followup_uses_top_finding_from_matching_scan(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    from scanner import Finding, ScanResult
+
+    def fake_run_scan(target):
+        return ScanResult(
+            target=target, scanned_at="t",
+            findings=[Finding("hsts", "Missing HSTS header", "high", "detail", "fix")],
+            reachable=True, error=None,
+        )
+
+    monkeypatch.setattr(app_module, "run_scan", fake_run_scan)
+    client.post("/scan", data={"target": "https://example.test"})  # saves a matching scan
+
+    client.post("/lead", data={
+        "email": "prospect@test.com", "target": "https://example.test",
+        "grade": "C", "score": "63",
+    })
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    import storage
+    lead_id = storage.list_leads()[0]["id"]
+
+    resp = client.post(f"/admin/leads/{lead_id}/draft-followup")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["source"] == "rule-based"
+    assert "missing hsts header" in data["message"].lower()
+
+
+def test_draft_lead_followup_with_no_matching_scan_still_drafts(client, monkeypatch):
+    """No scan on record for this target (e.g. it was deleted, or the lead
+    predates the scan) -- must still draft a generic follow-up, never 500."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    client.post("/lead", data={
+        "email": "prospect@test.com", "target": "https://no-scan-for-this.test",
+        "grade": "C", "score": "63",
+    })
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    import storage
+    lead_id = storage.list_leads()[0]["id"]
+
+    resp = client.post(f"/admin/leads/{lead_id}/draft-followup")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "no-scan-for-this.test" in data["message"]
 
 
 # --- Report email on lead capture --------------------------------------------

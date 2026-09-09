@@ -57,6 +57,14 @@ CRM. Leads live in `scans.db` now (a `leads` table, same DB as scans), not
 in `leads.csv`, the first `/admin` load after upgrading imports them in
 automatically (as status `new`), once.
 
+For a lead still sitting at `new`/`contacted`, a **Draft follow-up** button
+has Claude write a short, low-pressure nudge referencing the original
+scan's top finding and how long it's been — same idea as the report page's
+"draft an outreach message," just for someone who already gave their
+email. It only ever drafts; nothing here sends anything automatically —
+you copy it and send it yourself, the same as every other AI-drafted
+message in this app.
+
 ### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
 
 Everything above is passive (a normal browser visit generates the same

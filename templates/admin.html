@@ -49,7 +49,7 @@
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>When (UTC)</th><th>Email</th><th>Site</th><th>Grade</th><th>Score</th><th>Status</th><th>Notes</th></tr>
+        <tr><th>When (UTC)</th><th>Email</th><th>Site</th><th>Grade</th><th>Score</th><th>Status</th><th>Notes</th><th></th></tr>
       </thead>
       <tbody>
         {% for lead in leads %}
@@ -76,15 +76,69 @@
               <button type="submit" class="btn-secondary btn-sm">Save</button>
             </form>
           </td>
+          <td style="white-space:nowrap;">
+            {% if lead.status in ('new', 'contacted') %}
+            <button type="button" class="btn-secondary btn-sm draft-followup-btn"
+              data-lead-id="{{ lead.id }}" data-email="{{ lead.email }}">Draft follow-up</button>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  <div id="followup-result" style="display:none; margin-top:16px;">
+    <p class="muted" style="font-size:12.5px; margin-bottom:6px;">Follow-up draft for <strong id="followup-for"></strong>:</p>
+    <textarea id="followup-text" readonly rows="4"
+      style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--border);
+      background:var(--bg); color:var(--text); font-family:inherit; font-size:14px; resize:vertical;"></textarea>
+    <div style="height:10px;"></div>
+    <button type="button" id="followup-copy" class="btn btn-secondary btn-sm" style="width:auto;">Copy to clipboard</button>
+  </div>
   {% else %}
   <p class="muted">No leads yet.</p>
   {% endif %}
 </div>
+
+<script>
+  document.querySelectorAll('.draft-followup-btn').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      if (btn.disabled) return;
+      var original = btn.textContent;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Drafting…';
+      try {
+        var resp = await fetch('/admin/leads/' + encodeURIComponent(btn.dataset.leadId) + '/draft-followup', {
+          method: 'POST',
+          headers: {'X-CSRFToken': '{{ csrf_token() }}'}
+        });
+        var data = await resp.json();
+        if (resp.ok && data.message) {
+          document.getElementById('followup-for').textContent = btn.dataset.email;
+          document.getElementById('followup-text').value = data.message;
+          document.getElementById('followup-result').style.display = 'block';
+          document.getElementById('followup-result').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        } else {
+          alert('Could not draft a follow-up right now -- try again in a moment.');
+        }
+      } catch (err) {
+        alert('Could not draft a follow-up right now -- try again in a moment.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  });
+
+  var followupCopyBtn = document.getElementById('followup-copy');
+  if (followupCopyBtn) {
+    followupCopyBtn.addEventListener('click', function () {
+      var ta = document.getElementById('followup-text');
+      ta.select();
+      siteguardCopy(ta.value, this);
+    });
+  }
+</script>
 
 <div style="height:20px;"></div>
 
