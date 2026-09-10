@@ -100,8 +100,10 @@ Two ways a check actually runs:
   ```
   Set `TARGET_URL` (your Render web service's URL) and `TOKEN` (the same
   value as `INTERNAL_JOB_TOKEN` on the web service) as env vars on the cron
-  job itself. A cron job on Render's free tier works fine for this — it's
-  a few seconds of work, not a real workload.
+  job itself. **Unlike the web service, Render Cron Jobs have no free
+  tier** — the cheapest is the `starter` plan (a small recurring cost).
+  Until/unless that's worth it to you, the manual "Run check now" button
+  covers the same ground for free.
 
 ### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
 
