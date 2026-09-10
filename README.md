@@ -65,6 +65,44 @@ email. It only ever drafts; nothing here sends anything automatically —
 you copy it and send it yourself, the same as every other AI-drafted
 message in this app.
 
+### Monitoring — autonomous re-scans for a retainer client
+
+Click **Monitor** next to any recent scan in `/admin` and that target gets
+re-scanned periodically (`monitoring.py`), diffed against its last scan,
+with what changed (new findings, resolved findings) shown right in the
+"Monitored targets" table — Claude writes a one-line digest when something
+actually changes (`ai_narrative.generate_monitoring_digest`). This is the
+actual retainer/ongoing-monitoring offer, running for real instead of
+being something you'd have to remember to do by hand.
+
+**Nothing here emails or notifies a client automatically.** Changes just
+show up in `/admin` for you to review and decide what to send — the one
+exception is `MONITORING_ALERT_EMAIL` (optional): if set, a short digest
+goes to *your own* inbox when something changes, same as the operator
+emailing themselves anything else in this app.
+
+Two ways a check actually runs:
+- **On demand** — the "Run check now" button in `/admin`, no setup needed.
+- **On a schedule** — a `POST /internal/run-monitoring` request triggers a
+  check of every monitored target. It's guarded by a shared secret
+  (`INTERNAL_JOB_TOKEN` — an app-generated token, not a personal
+  credential; generate one yourself and set it in your env, see
+  `.env.example`) checked against an `X-Internal-Token` header, since a
+  cron job has no browser session or CSRF token. Unset, the endpoint
+  refuses to run — the manual button above works either way.
+
+  To actually schedule it, add a Render Cron Job (Render dashboard → New →
+  Cron Job, or the `create_cron_job` API) pointed at this repo, running on
+  whatever cadence you want (daily is plenty for most retainer clients), with
+  a trivial start command that just POSTs to your deployed app:
+  ```
+  python -c "import os, urllib.request as u; r = u.Request(os.environ['TARGET_URL'] + '/internal/run-monitoring', method='POST', headers={'X-Internal-Token': os.environ['TOKEN']}); u.urlopen(r)"
+  ```
+  Set `TARGET_URL` (your Render web service's URL) and `TOKEN` (the same
+  value as `INTERNAL_JOB_TOKEN` on the web service) as env vars on the cron
+  job itself. A cron job on Render's free tier works fine for this — it's
+  a few seconds of work, not a real workload.
+
 ### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
 
 Everything above is passive (a normal browser visit generates the same
@@ -260,6 +298,12 @@ rule-based fallback path.
   default) when they submit the fix-plan form. Off until `SMTP_USERNAME`/
   `SMTP_PASSWORD` are set; never raises, so a bad config or network hiccup
   can't break lead capture.
+- `monitoring.py` — the autonomous re-scan/diff logic behind "Monitored
+  targets" in `/admin`: re-scans a target, diffs findings against its last
+  scan, saves the new scan, and records what changed. Triggered by
+  `/admin/monitoring/run-now` (manual) or `/internal/run-monitoring` (a
+  scheduled job) in `app.py` -- this module is just the actual work, not
+  the trigger.
 - `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`

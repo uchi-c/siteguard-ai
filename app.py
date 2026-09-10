@@ -38,8 +38,10 @@ from storage import (
     save_scan, load_scan, list_recent_scans,
     log_active_scan_authorization, list_active_scan_audit,
     save_lead, list_leads, get_lead, update_lead, import_leads_csv_once, LEAD_STATUSES,
+    add_monitored_target, list_monitored_targets, remove_monitored_target, is_monitored,
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
+from monitoring import run_monitoring_check
 import active_scan_job
 import pdf_export
 import emailer
@@ -51,6 +53,11 @@ SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 # non-destructive attack probes, not passive checks). Off unless the
 # operator explicitly sets it -- adding the route doesn't make it usable.
 ACTIVE_TESTING_ENABLED = os.environ.get("ACTIVE_TESTING_ENABLED") == "1"
+
+# Shared secret for /internal/run-monitoring -- an app-generated token, not
+# a personal credential, so it's fine to set programmatically. Unset means
+# the route refuses to run at all rather than accepting an empty token.
+INTERNAL_JOB_TOKEN = os.environ.get("INTERNAL_JOB_TOKEN", "")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
@@ -262,12 +269,16 @@ def admin_dashboard():
     imported = import_leads_csv_once(LEADS_FILE)
     if imported:
         flash(f"Imported {imported} lead(s) from the old leads.csv into the new tracker.")
+    monitored = list_monitored_targets()
     return render_template(
         "admin.html",
         leads=list_leads(),
         lead_statuses=LEAD_STATUSES,
         scans=list_recent_scans(),
         active_testing_enabled=ACTIVE_TESTING_ENABLED,
+        monitored_targets=monitored,
+        monitored_target_set={m["target"] for m in monitored},
+        monitoring_configured=bool(INTERNAL_JOB_TOKEN),
     )
 
 
@@ -318,6 +329,58 @@ def draft_lead_followup(lead_id):
     days_since = _days_since(lead["created_at"])
     message, source = generate_followup_message(lead["target"], top_title, top_detail, days_since)
     return {"message": message, "source": source}
+
+
+@app.route("/admin/monitoring/toggle", methods=["POST"])
+@admin_required
+def toggle_monitoring():
+    target = (request.form.get("target") or "").strip()
+    if not target:
+        flash("Missing target.")
+        return redirect(url_for("admin_dashboard"))
+    target = _normalize_url(target)
+    if is_monitored(target):
+        for m in list_monitored_targets():
+            if m["target"] == target:
+                remove_monitored_target(m["id"])
+                break
+        flash(f"Stopped monitoring {target}.")
+    else:
+        add_monitored_target(target)
+        flash(f"Now monitoring {target} -- it'll be re-scanned on the next scheduled check.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/monitoring/run-now", methods=["POST"])
+@admin_required
+def run_monitoring_now():
+    results = run_monitoring_check()
+    changed = sum(1 for r in results if r.get("status") == "checked" and r.get("new_findings"))
+    errored = sum(1 for r in results if r.get("status") == "error")
+    if not results:
+        flash("No monitored targets to check yet.")
+    else:
+        flash(f"Checked {len(results)} target(s): {changed} with new findings, {errored} failed.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/internal/run-monitoring", methods=["POST"])
+@csrf.exempt
+@limiter.limit("10 per hour")
+def run_monitoring_internal():
+    """Triggered by a Render Cron Job on a schedule (see render.yaml /
+    the Render dashboard), not a browser -- no CSRF token or admin
+    session available, so this is guarded by a shared secret instead
+    (constant-time compare, same pattern as the admin password check).
+    INTERNAL_JOB_TOKEN is an app-generated token, never a credential
+    anyone types in, and unset means this refuses to run at all."""
+    if not INTERNAL_JOB_TOKEN:
+        return {"error": "monitoring is not configured on this deployment"}, 503
+    provided = request.headers.get("X-Internal-Token", "")
+    if not hmac.compare_digest(provided, INTERNAL_JOB_TOKEN):
+        return {"error": "unauthorized"}, 401
+    results = run_monitoring_check()
+    return {"checked": len(results), "results": results}
 
 
 @app.route("/admin/active-scan", methods=["GET"])

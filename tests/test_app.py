@@ -312,6 +312,108 @@ def test_draft_lead_followup_with_no_matching_scan_still_drafts(client, monkeypa
     assert "no-scan-for-this.test" in data["message"]
 
 
+# --- Monitoring (agentic workflow, phase 2) -----------------------------------
+
+def test_toggle_monitoring_requires_admin_login(client):
+    resp = client.post("/admin/monitoring/toggle", data={"target": "https://example.test"})
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_toggle_monitoring_adds_then_removes(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    import storage
+    resp = client.post("/admin/monitoring/toggle", data={"target": "https://example.test"}, follow_redirects=True)
+    assert b"Now monitoring" in resp.data
+    assert storage.is_monitored("https://example.test") is True
+
+    resp2 = client.post("/admin/monitoring/toggle", data={"target": "https://example.test"}, follow_redirects=True)
+    assert b"Stopped monitoring" in resp2.data
+    assert storage.is_monitored("https://example.test") is False
+
+
+def test_toggle_monitoring_normalizes_target(client, monkeypatch):
+    """example.test and https://example.test must land on the same
+    monitored row, or the un-monitor toggle would never match."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    import storage
+    client.post("/admin/monitoring/toggle", data={"target": "example.test"})
+    assert storage.is_monitored("https://example.test") is True
+
+
+def test_run_monitoring_now_requires_admin_login(client):
+    resp = client.post("/admin/monitoring/run-now")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_run_monitoring_now_with_no_targets_flashes(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.post("/admin/monitoring/run-now", follow_redirects=True)
+    assert b"No monitored targets" in resp.data
+
+
+def test_run_monitoring_now_checks_targets_and_flashes_summary(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    client.post("/admin/monitoring/toggle", data={"target": "https://example.test"})
+
+    monkeypatch.setattr(app_module, "run_monitoring_check", lambda: [
+        {"target": "https://example.test", "status": "checked", "new_findings": 2, "resolved_findings": 0},
+    ])
+
+    resp = client.post("/admin/monitoring/run-now", follow_redirects=True)
+    assert b"Checked 1 target" in resp.data
+    assert b"1 with new findings" in resp.data
+
+
+def test_internal_run_monitoring_disabled_when_token_unset(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "")
+    resp = client.post("/internal/run-monitoring")
+    assert resp.status_code == 503
+
+
+def test_internal_run_monitoring_rejects_missing_token(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "the-real-token")
+    resp = client.post("/internal/run-monitoring")
+    assert resp.status_code == 401
+
+
+def test_internal_run_monitoring_rejects_wrong_token(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "the-real-token")
+    resp = client.post("/internal/run-monitoring", headers={"X-Internal-Token": "wrong-token"})
+    assert resp.status_code == 401
+
+
+def test_internal_run_monitoring_accepts_correct_token(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "the-real-token")
+    monkeypatch.setattr(app_module, "run_monitoring_check", lambda: [
+        {"target": "https://example.test", "status": "checked", "new_findings": 0, "resolved_findings": 0},
+    ])
+    resp = client.post("/internal/run-monitoring", headers={"X-Internal-Token": "the-real-token"})
+    assert resp.status_code == 200
+    assert resp.get_json()["checked"] == 1
+
+
+def test_internal_run_monitoring_has_no_csrf_requirement(client, monkeypatch):
+    """A cron job has no browser session or CSRF token -- this route must
+    work even with CSRF protection globally enabled (unlike every other
+    POST route in the app)."""
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "the-real-token")
+    monkeypatch.setattr(app_module, "run_monitoring_check", lambda: [])
+    app_module.app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        resp = client.post("/internal/run-monitoring", headers={"X-Internal-Token": "the-real-token"})
+        assert resp.status_code == 200
+    finally:
+        app_module.app.config["WTF_CSRF_ENABLED"] = False
+
+
 # --- Report email on lead capture --------------------------------------------
 
 def test_lead_without_scan_id_does_not_start_an_email_thread(client, monkeypatch):

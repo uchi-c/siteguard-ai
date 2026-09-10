@@ -110,3 +110,51 @@ def test_generate_narrative_falls_back_when_api_call_raises(monkeypatch):
     text, source = ai_narrative.generate_narrative(result)
     assert source == "rule-based"
     assert text
+
+
+# --- generate_monitoring_digest ------------------------------------------------
+
+def test_generate_monitoring_digest_new_findings_only(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    new = [Finding("csp-missing", "Missing CSP header", "medium", "detail", "fix")]
+    text, source = ai_narrative.generate_monitoring_digest("https://example.test", new, [])
+    assert source == "rule-based"
+    assert "example.test" in text
+    assert "1 new finding" in text
+    assert "missing csp header" in text.lower()
+
+
+def test_generate_monitoring_digest_resolved_only(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    resolved = [Finding("hsts", "Missing HSTS header", "high", "detail", "fix")]
+    text, source = ai_narrative.generate_monitoring_digest("https://example.test", [], resolved)
+    assert source == "rule-based"
+    assert "1 previous finding" in text
+    assert "resolved" in text.lower()
+
+
+def test_generate_monitoring_digest_no_changes(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    text, source = ai_narrative.generate_monitoring_digest("https://example.test", [], [])
+    assert source == "rule-based"
+    assert "no changes" in text.lower()
+
+
+def test_generate_monitoring_digest_falls_back_when_api_call_raises(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake-not-a-real-key")
+    import anthropic
+
+    class _BoomMessages:
+        @staticmethod
+        def create(**kwargs):
+            raise RuntimeError("simulated API failure")
+
+    class _BoomClient:
+        messages = _BoomMessages()
+
+    monkeypatch.setattr(anthropic, "Anthropic", lambda api_key: _BoomClient())
+
+    new = [Finding("csp-missing", "Missing CSP header", "medium", "detail", "fix")]
+    text, source = ai_narrative.generate_monitoring_digest("https://example.test", new, [])
+    assert source == "rule-based"
+    assert text

@@ -1,8 +1,11 @@
 """
 Persists scan results (so a report can be revisited via a shareable link,
-/report/<id>, instead of being thrown away after the first render) and
-leads (email + target + grade/score, plus an editable status/notes pair
-for working them as a pipeline -- new/contacted/quoted/won/lost).
+/report/<id>, instead of being thrown away after the first render), leads
+(email + target + grade/score, plus an editable status/notes pair for
+working them as a pipeline -- new/contacted/quoted/won/lost), and
+monitored targets (a target flagged for recurring re-scans, with the
+result of its last check -- see monitoring.py for the actual re-scan/diff
+logic that reads and writes these rows).
 
 SQLite on local disk -- ephemeral on a Render free-tier redeploy; fine for
 a link meant to stay useful for days or weeks, and for a lead list you'd
@@ -55,6 +58,17 @@ def _connect():
         "score INTEGER, "
         "status TEXT NOT NULL DEFAULT 'new', "
         "notes TEXT NOT NULL DEFAULT '')"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS monitored_targets ("
+        "id TEXT PRIMARY KEY, "
+        "target TEXT NOT NULL UNIQUE, "
+        "added_at TEXT NOT NULL, "
+        "last_checked_at TEXT, "
+        "last_scan_id TEXT, "
+        "last_new_count INTEGER NOT NULL DEFAULT 0, "
+        "last_resolved_count INTEGER NOT NULL DEFAULT 0, "
+        "last_digest TEXT NOT NULL DEFAULT '')"
     )
     return conn
 
@@ -224,3 +238,69 @@ def list_recent_scans(limit: int = 50) -> list[dict]:
             "score": result.score,
         })
     return out
+
+
+# --- Monitored targets (autonomous re-scan tracking) -------------------------
+
+def add_monitored_target(target: str) -> str:
+    """Idempotent: adding an already-monitored target just returns its
+    existing id rather than erroring or creating a duplicate row."""
+    with closing(_connect()) as conn:
+        existing = conn.execute(
+            "SELECT id FROM monitored_targets WHERE target = ?", (target,)
+        ).fetchone()
+        if existing:
+            return existing[0]
+        target_id = secrets.token_urlsafe(8)
+        conn.execute(
+            "INSERT INTO monitored_targets "
+            "(id, target, added_at, last_checked_at, last_scan_id, "
+            "last_new_count, last_resolved_count, last_digest) "
+            "VALUES (?, ?, ?, NULL, NULL, 0, 0, '')",
+            (target_id, target, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return target_id
+
+
+def list_monitored_targets() -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT id, target, added_at, last_checked_at, last_scan_id, "
+            "last_new_count, last_resolved_count, last_digest "
+            "FROM monitored_targets ORDER BY added_at DESC"
+        ).fetchall()
+    return [
+        {"id": r[0], "target": r[1], "added_at": r[2], "last_checked_at": r[3],
+         "last_scan_id": r[4], "last_new_count": r[5], "last_resolved_count": r[6],
+         "last_digest": r[7]}
+        for r in rows
+    ]
+
+
+def is_monitored(target: str) -> bool:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM monitored_targets WHERE target = ?", (target,)
+        ).fetchone()
+    return row is not None
+
+
+def remove_monitored_target(target_id: str) -> bool:
+    with closing(_connect()) as conn:
+        cur = conn.execute("DELETE FROM monitored_targets WHERE id = ?", (target_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def record_monitor_check(
+    target_id: str, scan_id: str, new_count: int, resolved_count: int, digest: str,
+) -> None:
+    with closing(_connect()) as conn:
+        conn.execute(
+            "UPDATE monitored_targets SET last_checked_at = ?, last_scan_id = ?, "
+            "last_new_count = ?, last_resolved_count = ?, last_digest = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), scan_id, new_count, resolved_count,
+             digest, target_id),
+        )
+        conn.commit()

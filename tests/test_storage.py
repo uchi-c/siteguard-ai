@@ -165,3 +165,74 @@ def test_import_leads_csv_once_skips_when_table_already_has_leads(tmp_path, monk
 def test_import_leads_csv_once_returns_zero_when_file_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
     assert storage.import_leads_csv_once(str(tmp_path / "does-not-exist.csv")) == 0
+
+
+# --- Monitored targets --------------------------------------------------------
+
+def test_add_and_list_monitored_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+
+    targets = storage.list_monitored_targets()
+    assert len(targets) == 1
+    assert targets[0]["id"] == target_id
+    assert targets[0]["target"] == "https://example.test"
+    assert targets[0]["last_checked_at"] is None
+    assert targets[0]["last_scan_id"] is None
+    assert targets[0]["last_new_count"] == 0
+    assert targets[0]["last_resolved_count"] == 0
+
+
+def test_add_monitored_target_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    first_id = storage.add_monitored_target("https://example.test")
+    second_id = storage.add_monitored_target("https://example.test")
+    assert first_id == second_id
+    assert len(storage.list_monitored_targets()) == 1
+
+
+def test_is_monitored(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    assert storage.is_monitored("https://example.test") is False
+    storage.add_monitored_target("https://example.test")
+    assert storage.is_monitored("https://example.test") is True
+
+
+def test_remove_monitored_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    assert storage.remove_monitored_target(target_id) is True
+    assert storage.list_monitored_targets() == []
+    assert storage.is_monitored("https://example.test") is False
+
+
+def test_remove_monitored_target_returns_false_for_unknown_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    assert storage.remove_monitored_target("no-such-id") is False
+
+
+def test_record_monitor_check_updates_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+
+    result = ScanResult(target="https://example.test", scanned_at="t", findings=[], reachable=True, error=None)
+    scan_id = storage.save_scan(result, "narrative", "rule-based")
+
+    storage.record_monitor_check(target_id, scan_id, new_count=2, resolved_count=1, digest="2 new, 1 resolved")
+
+    targets = storage.list_monitored_targets()
+    assert targets[0]["last_scan_id"] == scan_id
+    assert targets[0]["last_new_count"] == 2
+    assert targets[0]["last_resolved_count"] == 1
+    assert targets[0]["last_digest"] == "2 new, 1 resolved"
+    assert targets[0]["last_checked_at"] is not None
+
+
+def test_list_monitored_targets_orders_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.add_monitored_target("https://a.test")
+    time.sleep(0.01)
+    storage.add_monitored_target("https://b.test")
+
+    targets = storage.list_monitored_targets()
+    assert [t["target"] for t in targets] == ["https://b.test", "https://a.test"]

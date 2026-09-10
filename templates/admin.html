@@ -148,7 +148,7 @@
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>When (UTC)</th><th>Site</th><th>Grade</th><th>Score</th><th>Report</th></tr>
+        <tr><th>When (UTC)</th><th>Site</th><th>Grade</th><th>Score</th><th>Report</th><th>Monitoring</th></tr>
       </thead>
       <tbody>
         {% for s in scans %}
@@ -158,6 +158,17 @@
           <td>{{ s.grade }}</td>
           <td>{{ s.score }}</td>
           <td><a href="{{ url_for('view_report', scan_id=s.id) }}">View &rarr;</a></td>
+          <td style="white-space:nowrap;">
+            <form method="post" action="{{ url_for('toggle_monitoring') }}" style="width:auto;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="target" value="{{ s.target }}">
+              {% if s.target in monitored_target_set %}
+              <button type="submit" class="btn-secondary btn-sm">Stop monitoring</button>
+              {% else %}
+              <button type="submit" class="btn-secondary btn-sm">Monitor</button>
+              {% endif %}
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -165,6 +176,68 @@
   </div>
   {% else %}
   <p class="muted">No scans yet.</p>
+  {% endif %}
+</div>
+
+<div style="height:20px;"></div>
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+    <h3 style="margin:0;">Monitored targets ({{ monitored_targets|length }})</h3>
+    {% if monitored_targets %}
+    <form method="post" action="{{ url_for('run_monitoring_now') }}" style="width:auto;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-secondary btn-sm">Run check now</button>
+    </form>
+    {% endif %}
+  </div>
+  <p class="muted" style="font-size:13px; margin:10px 0 0;">
+    A monitored target gets automatically re-scanned on a schedule (once
+    the operator sets up the cron job -- see README) or on demand with
+    "Run check now." Findings are diffed against the last check; nothing
+    here emails or notifies the client automatically -- review any changes
+    here and reach out yourself.
+  </p>
+  {% if monitored_targets %}
+  <div style="height:14px;"></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Target</th><th>Added</th><th>Last checked</th><th>Changes</th><th>Digest</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for m in monitored_targets %}
+        <tr>
+          <td style="word-break:break-all;">
+            {% if m.last_scan_id %}
+            <a href="{{ url_for('view_report', scan_id=m.last_scan_id) }}">{{ m.target }}</a>
+            {% else %}
+            {{ m.target }}
+            {% endif %}
+          </td>
+          <td class="muted" style="white-space:nowrap;">{{ m.added_at[:10] }}</td>
+          <td class="muted" style="white-space:nowrap;">{{ m.last_checked_at[:16].replace('T', ' ') if m.last_checked_at else 'never' }}</td>
+          <td style="white-space:nowrap;">
+            {% if m.last_new_count %}<span style="color:var(--critical); font-weight:700;">{{ m.last_new_count }} new</span>{% endif %}
+            {% if m.last_new_count and m.last_resolved_count %} &middot; {% endif %}
+            {% if m.last_resolved_count %}<span style="color:var(--accent);">{{ m.last_resolved_count }} resolved</span>{% endif %}
+            {% if not m.last_new_count and not m.last_resolved_count %}<span class="muted">no change</span>{% endif %}
+          </td>
+          <td class="muted" style="font-size:12.5px; max-width:260px;">{{ m.last_digest or '' }}</td>
+          <td>
+            <form method="post" action="{{ url_for('toggle_monitoring') }}" style="width:auto;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="target" value="{{ m.target }}">
+              <button type="submit" class="btn-secondary btn-sm">Unmonitor</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted" style="margin-top:10px;">No monitored targets yet -- click "Monitor" next to a scan above.</p>
   {% endif %}
 </div>
 

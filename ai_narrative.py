@@ -11,7 +11,7 @@ prospect instead of a generic scanner printout.
 from __future__ import annotations
 
 import os
-from scanner import ScanResult
+from scanner import Finding, ScanResult
 
 MODEL = os.environ.get("SITEGUARD_MODEL", "claude-sonnet-4-5")
 
@@ -196,3 +196,62 @@ def generate_narrative(result: ScanResult) -> tuple[str, str]:
     except Exception:
         # Never let an API hiccup break the report -- fall back silently.
         return _rule_based_narrative(result), "rule-based"
+
+
+SYSTEM_PROMPT_MONITORING = """You monitor a client's website security over time on their
+behalf and just noticed a change since the last check. Given a list of newly-appeared
+findings and a list of findings that look resolved since the last scan, write ONE short
+paragraph (40-70 words) for whoever manages this client's monitoring, in plain English (no
+jargon, no severity labels). Lead with what's most urgent if anything is new; mention
+what got fixed if that's the only change. No markdown, no greeting, no signature -- just
+the paragraph."""
+
+
+def _rule_based_monitoring_digest(target: str, new_findings: list[Finding], resolved_findings: list[Finding]) -> str:
+    parts = []
+    if new_findings:
+        top = new_findings[0]
+        extra = f" and {len(new_findings) - 1} more" if len(new_findings) > 1 else ""
+        parts.append(f"{len(new_findings)} new finding(s) on {target} since the last check, "
+                      f"including {top.title.lower()}{extra}.")
+    if resolved_findings:
+        parts.append(f"{len(resolved_findings)} previous finding(s) on {target} appear resolved.")
+    return " ".join(parts) if parts else f"No changes on {target} since the last check."
+
+
+def generate_monitoring_digest(
+    target: str, new_findings: list[Finding], resolved_findings: list[Finding],
+) -> tuple[str, str]:
+    """Returns (digest_text, source) where source is 'ai' or 'rule-based'.
+    Only meaningful to call when something actually changed (the caller in
+    monitoring.py only calls this when new_findings or resolved_findings is
+    non-empty) -- same Claude-call-with-rule-based-fallback shape as the
+    rest of this module."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return _rule_based_monitoring_digest(target, new_findings, resolved_findings), "rule-based"
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        new_text = "\n".join(
+            f"- [{f.severity.upper()}] {f.title}: {f.detail}" for f in new_findings
+        ) or "none"
+        resolved_text = "\n".join(f"- {f.title}" for f in resolved_findings) or "none"
+        user_content = (
+            f"Site: {target}\n"
+            f"Newly appeared findings:\n{new_text}\n\n"
+            f"Resolved findings:\n{resolved_text}"
+        )
+        message = client.messages.create(
+            model=MODEL,
+            max_tokens=200,
+            system=SYSTEM_PROMPT_MONITORING,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = "".join(block.text for block in message.content if hasattr(block, "text")).strip()
+        if text:
+            return text, "ai"
+        return _rule_based_monitoring_digest(target, new_findings, resolved_findings), "rule-based"
+    except Exception:
+        return _rule_based_monitoring_digest(target, new_findings, resolved_findings), "rule-based"
