@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Malicious &amp; phishing URL checker{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0;">Is this URL malicious or a phishing site?</h2>
+  <p class="muted" style="font-size:14px;">
+    Paste a link before you click it &mdash; checks it against Google's
+    Safe Browsing threat database (malware, phishing, unwanted software).
+    Never visits the URL itself, so this is safe to run on anything,
+    including a link you're already suspicious of.
+  </p>
+
+  <form method="post" action="{{ url_for('check_url_start') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="text" name="url" placeholder="e.g. paypal-verify-account.example.com"
+      value="{{ result.url if result else '' }}" required autofocus>
+    <div style="height:14px;"></div>
+    <button type="submit">Check URL</button>
+  </form>
+
+  {% if result %}
+  <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+    <p class="muted" style="font-size:12.5px; word-break:break-all; margin:0 0 10px;">{{ result.url }}</p>
+
+    {% if result.verdict == 'malicious' %}
+    <div style="font-size:22px; font-weight:800; color:var(--critical);">
+      &#9888; Known threat: {{ result.threats|join(', ') }}
+    </div>
+    <p class="muted" style="font-size:13.5px; margin-top:8px;">
+      Matched Google Safe Browsing's live threat database. Don't visit this
+      link, enter credentials, or download anything from it.
+    </p>
+
+    {% elif result.verdict == 'suspicious' %}
+    <div style="font-size:22px; font-weight:800; color:var(--high);">
+      &#9888; Possibly {{ result.threats|join(', ') }}
+    </div>
+    <p class="muted" style="font-size:13.5px; margin-top:8px;">
+      This is from a local heuristic model, not a live threat database
+      ({{ 'no Safe Browsing API key is configured on this deployment' }}) --
+      a meaningfully weaker signal. It can mistake unfamiliar-but-legitimate
+      sites for suspicious ones. Treat this as "worth a second look," not a
+      confirmed verdict {% if result.confidence %}({{ (result.confidence * 100)|round(0) }}% model confidence){% endif %}.
+    </p>
+
+    {% elif result.verdict == 'no-known-threats' %}
+    <div style="font-size:22px; font-weight:800; color:var(--accent);">
+      &#10003; No known threats found
+    </div>
+    <p class="muted" style="font-size:13.5px; margin-top:8px;">
+      {% if result.source == 'safe-browsing' %}
+      Not on Google Safe Browsing's known-threat list. That's not the same
+      as "confirmed safe" -- a URL can be malicious without being cataloged
+      yet, especially a brand-new one.
+      {% elif result.source == 'allowlist' %}
+      This is a well-known, widely-trusted domain.
+      {% elif result.source == 'ml' %}
+      A local heuristic model (no live Safe Browsing API key configured on
+      this deployment) found nothing suspicious -- a meaningfully weaker
+      check than a live database. Stay cautious with anything asking for
+      credentials or payment info regardless.
+      {% endif %}
+    </p>
+
+    {% else %}
+    <div style="font-size:20px; font-weight:800; color:var(--muted);">
+      Couldn't check this URL
+    </div>
+    <p class="muted" style="font-size:13.5px; margin-top:8px;">
+      Neither a Safe Browsing API key nor the local model are available on
+      this deployment. Set <code>GOOGLE_SAFE_BROWSING_API_KEY</code> (see
+      the README), or run <code>ml/train_url_classifier.py</code> to build
+      the local fallback model.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('index') }}">&larr; Back home</a></p>
+{% endblock %}

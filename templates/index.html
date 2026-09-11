@@ -15,6 +15,7 @@
 </p>
 <p class="muted" style="text-align:center; margin-top:10px; font-size:13px;">
   Scanning several prospects? <a href="{{ url_for('batch_form') }}">Batch scan &rarr;</a>
+  &middot; Got a suspicious link? <a href="{{ url_for('check_url_form') }}">Check if a URL is malicious &rarr;</a>
 </p>
 <script>
   document.getElementById('scan-form').addEventListener('submit', function (e) {

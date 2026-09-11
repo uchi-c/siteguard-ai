@@ -1,0 +1,10 @@
+{
+  "classes": [
+    "benign",
+    "defacement",
+    "malware",
+    "phishing"
+  ],
+  "report": "              precision    recall  f1-score   support\n\n      benign      0.979     0.909     0.943     85621\n  defacement      0.989     0.997     0.993     19292\n     malware      0.939     0.961     0.950      6504\n    phishing      0.687     0.901     0.780     18822\n\n    accuracy                          0.923    130239\n   macro avg      0.899     0.942     0.916    130239\nweighted avg      0.936     0.923     0.927    130239\n",
+  "n_samples": 651191
+}

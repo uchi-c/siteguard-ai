@@ -46,6 +46,7 @@ import active_scan_job
 import pdf_export
 import emailer
 import payload_classifier
+import url_safety
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
@@ -184,6 +185,22 @@ def outreach():
         return {"error": "Missing target."}, 400
     message, source = generate_outreach_message(target, top_title, top_detail, has_findings)
     return {"message": message, "source": source}
+
+
+@app.route("/check-url", methods=["GET"])
+def check_url_form():
+    return render_template("check_url_form.html")
+
+
+@app.route("/check-url", methods=["POST"])
+@limiter.limit("20 per minute; 100 per hour")
+def check_url_start():
+    url = (request.form.get("url") or "").strip()
+    if not url:
+        flash("Enter a URL to check.")
+        return redirect(url_for("check_url_form"))
+    result = url_safety.check_url(url)
+    return render_template("check_url_form.html", result=result)
 
 
 @app.route("/batch", methods=["GET"])

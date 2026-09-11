@@ -203,6 +203,50 @@ possibly defeating anti-bot protections (uruu.enterprises's signup form
 sits behind a Cloudflare Turnstile CAPTCHA), which is out of scope for a
 detection-only tool.
 
+### Malicious/phishing URL checker (`/check-url`)
+
+A different question from everything above: not "is my site configured
+securely" but "is *this* URL itself dangerous" — paste a link before you
+click it and get a verdict. Public, no admin gating, and never fetches the
+URL at all (just looks it up against a threat database/model), so there's
+no SSRF concern and it's safe to run on a link you're already suspicious of.
+
+Two layers, in order:
+1. **Google Safe Browsing** (primary, when `GOOGLE_SAFE_BROWSING_API_KEY`
+   is set — free, get one at console.cloud.google.com) — a live,
+   constantly-updated threat database covering malware, phishing
+   ("social engineering" in Safe Browsing's terms), unwanted software, and
+   potentially harmful apps. Authoritative for what it does cover.
+2. **A local fallback** when no key is set or the API call fails: first a
+   small curated allowlist of extremely well-known domains
+   (`known_domains.py`), then a locally-trained ML model
+   (`ml/train_url_classifier.py`, same TF-IDF char n-gram + logistic
+   regression approach as the payload classifier below) if the domain
+   isn't on that list.
+
+**The language is deliberately hedged, and that's load-bearing, not just
+caution for its own sake.** "No known threats found" is not "confirmed
+safe" — Safe Browsing not having cataloged a URL yet doesn't mean it's
+harmless. And the ML fallback's "suspicious" verdict is explicitly weaker
+than Safe Browsing's "malicious" — the UI says so directly, because it has
+to: building this surfaced a real bug where the model confidently
+(98–99.9%) flagged **google.com and wikipedia.org as phishing**. The
+Kaggle training dataset's "benign" class turned out to be mostly deep
+links to arbitrary web content, not bare domain homepages, while its
+phishing examples disproportionately impersonate exactly that
+bare-domain shape — so any short `www.brand.com`-looking URL statistically
+resembled the dataset's phishing class more than its benign one,
+independent of the actual brand. Fixed with two things: every training
+URL now goes through the same normalization the app applies before
+inference (a first, smaller version of this bug), and known-safe domains
+are oversampled into training *and* checked via a hard runtime allowlist
+before the model is ever consulted. The model still isn't fully reliable
+on legitimate domains outside that list (a static model trained once
+fundamentally can't out-reason a live reputation database) — which is
+exactly why it's a fallback, and exactly why the UI never lets an ML
+verdict read as certain. See `known_domains.py` and
+`ml/train_url_classifier.py` for the full story.
+
 ### Payload classifier (`/admin/classify`)
 
 A small trained ML model — TF-IDF character n-grams + logistic regression,
@@ -310,6 +354,14 @@ rule-based fallback path.
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`
   (gitignored, fetch via Kaggle -- see above). Not run at request time.
+- `url_safety.py` — `/check-url`'s Safe-Browsing-first, allowlist-then-ML-
+  fallback orchestrator. Never fetches the target URL.
+- `known_domains.py` — the runtime allowlist `url_safety.py` checks before
+  ever trusting the ML fallback, and the same list oversampled into that
+  model's training data. Exists because of a real bug -- see the section
+  above.
+- `url_classifier.py` / `ml/train_url_classifier.py` — the ML fallback,
+  structured identically to `payload_classifier.py` / `ml/train.py`.
 - `templates/` — the actual page design.
 - `test_target.py` — a deliberately broken local server, useful for
   demoing/testing without needing a real site. `python test_target.py` runs

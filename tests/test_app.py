@@ -92,6 +92,78 @@ def test_outreach_missing_target_returns_400(client):
     assert resp.status_code == 400
 
 
+# --- URL safety checker (/check-url, public -- no SSRF/gating needed since --
+# --- it never fetches the target, only looks it up against a threat DB) -----
+
+def test_check_url_form_loads(client):
+    resp = client.get("/check-url")
+    assert resp.status_code == 200
+    assert b"malicious" in resp.data.lower()
+
+
+def test_check_url_empty_flashes_and_redirects(client):
+    resp = client.post("/check-url", data={"url": ""}, follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"Enter a URL to check." in resp.data
+
+
+def test_check_url_renders_malicious_verdict(client, monkeypatch):
+    monkeypatch.setattr(app_module.url_safety, "check_url", lambda url: {
+        "url": "https://evil.test", "verdict": "malicious",
+        "threats": ["phishing"], "source": "safe-browsing", "confidence": None,
+    })
+    resp = client.post("/check-url", data={"url": "evil.test"})
+    assert resp.status_code == 200
+    assert b"Known threat" in resp.data
+    assert b"phishing" in resp.data
+
+
+def test_check_url_renders_no_known_threats(client, monkeypatch):
+    monkeypatch.setattr(app_module.url_safety, "check_url", lambda url: {
+        "url": "https://example.test", "verdict": "no-known-threats",
+        "threats": [], "source": "safe-browsing", "confidence": None,
+    })
+    resp = client.post("/check-url", data={"url": "example.test"})
+    assert resp.status_code == 200
+    assert b"No known threats found" in resp.data
+
+
+def test_check_url_renders_suspicious_with_hedged_language(client, monkeypatch):
+    monkeypatch.setattr(app_module.url_safety, "check_url", lambda url: {
+        "url": "https://maybe-bad.test", "verdict": "suspicious",
+        "threats": ["phishing"], "source": "ml", "confidence": 0.72,
+    })
+    resp = client.post("/check-url", data={"url": "maybe-bad.test"})
+    assert resp.status_code == 200
+    assert b"Possibly" in resp.data
+    assert b"local heuristic model" in resp.data  # never claims certainty for an ML verdict
+
+
+def test_check_url_renders_unavailable(client, monkeypatch):
+    monkeypatch.setattr(app_module.url_safety, "check_url", lambda url: {
+        "url": "https://example.test", "verdict": "unavailable",
+        "threats": [], "source": "none", "confidence": None,
+    })
+    resp = client.post("/check-url", data={"url": "example.test"})
+    assert resp.status_code == 200
+    assert b"Couldn" in resp.data
+
+
+def test_check_url_never_claims_safe_only_no_known_threats(client, monkeypatch):
+    """Language check: this tool must never affirmatively claim a URL IS
+    safe -- only that no known threat was found. "not the same as
+    confirmed safe" (a deliberate disclaimer) is fine; "this url is safe"
+    would not be."""
+    monkeypatch.setattr(app_module.url_safety, "check_url", lambda url: {
+        "url": "https://example.test", "verdict": "no-known-threats",
+        "threats": [], "source": "safe-browsing", "confidence": None,
+    })
+    resp = client.post("/check-url", data={"url": "example.test"})
+    assert b"this url is safe" not in resp.data.lower()
+    assert b"url is confirmed safe" not in resp.data.lower()
+    assert b"no known threats found" in resp.data.lower()
+
+
 # --- CSRF protection ---------------------------------------------------------
 
 def test_scan_without_csrf_token_is_rejected(client):
