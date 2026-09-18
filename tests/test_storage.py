@@ -236,3 +236,55 @@ def test_list_monitored_targets_orders_newest_first(tmp_path, monkeypatch):
 
     targets = storage.list_monitored_targets()
     assert [t["target"] for t in targets] == ["https://b.test", "https://a.test"]
+
+
+# --- Scan request log (abuse visibility + per-domain cooldown) --------------
+
+def test_log_and_list_scan_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.log_scan_request("1.2.3.4", "https://example.test", "grade A, score 100/100, 0 finding(s)")
+
+    entries = storage.list_scan_requests()
+    assert len(entries) == 1
+    assert entries[0]["source_ip"] == "1.2.3.4"
+    assert entries[0]["target"] == "https://example.test"
+    assert entries[0]["result_summary"] == "grade A, score 100/100, 0 finding(s)"
+    assert entries[0]["created_at"]
+
+
+def test_list_scan_requests_orders_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.log_scan_request("1.1.1.1", "https://a.test", "first")
+    time.sleep(0.01)
+    storage.log_scan_request("2.2.2.2", "https://b.test", "second")
+
+    entries = storage.list_scan_requests()
+    assert [e["target"] for e in entries] == ["https://b.test", "https://a.test"]
+
+
+def test_count_recent_scan_requests_only_counts_within_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    assert storage.count_recent_scan_requests("https://example.test", 60) == 0
+
+    for _ in range(3):
+        storage.log_scan_request("1.2.3.4", "https://example.test", "grade A, score 100/100, 0 finding(s)")
+    storage.log_scan_request("1.2.3.4", "https://other.test", "grade A, score 100/100, 0 finding(s)")
+
+    assert storage.count_recent_scan_requests("https://example.test", 60) == 3
+    assert storage.count_recent_scan_requests("https://other.test", 60) == 1
+
+
+def test_count_recent_scan_requests_excludes_entries_outside_window(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    from contextlib import closing
+    with closing(storage._connect()) as conn:
+        conn.execute(
+            "INSERT INTO scan_requests (created_at, source_ip, target, result_summary) VALUES (?, ?, ?, ?)",
+            (old_time, "1.2.3.4", "https://stale.test", "grade A, score 100/100, 0 finding(s)"),
+        )
+        conn.commit()
+
+    assert storage.count_recent_scan_requests("https://stale.test", 60) == 0

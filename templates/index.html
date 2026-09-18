@@ -4,6 +4,14 @@
 <div class="card">
   <form action="{{ url_for('scan') }}" method="post" id="scan-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <!-- Honeypot: invisible to real visitors, off-screen rather than
+         type="hidden" so simple bots that autofill every field still get
+         caught. A non-empty value here means the submitter isn't human --
+         see abuse_guard.py. -->
+    <div style="position:absolute; left:-9999px; top:-9999px;" aria-hidden="true">
+      <label for="{{ honeypot_field }}">Company website</label>
+      <input type="text" id="{{ honeypot_field }}" name="{{ honeypot_field }}" tabindex="-1" autocomplete="off">
+    </div>
     <label for="target" style="display:block; font-weight:600; margin-bottom:8px;">Website URL</label>
     <input type="text" id="target" name="target" placeholder="yourbusiness.com" required autofocus>
     <div style="height:14px;"></div>

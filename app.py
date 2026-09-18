@@ -39,6 +39,11 @@ from storage import (
     log_active_scan_authorization, list_active_scan_audit,
     save_lead, list_leads, get_lead, update_lead, import_leads_csv_once, LEAD_STATUSES,
     add_monitored_target, list_monitored_targets, remove_monitored_target, is_monitored,
+    log_scan_request, list_scan_requests,
+)
+from abuse_guard import (
+    is_honeypot_triggered, is_domain_in_cooldown, HONEYPOT_FIELD_NAME,
+    DOMAIN_COOLDOWN_MAX_REQUESTS, DOMAIN_COOLDOWN_WINDOW_MINUTES,
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 from monitoring import run_monitoring_check
@@ -94,25 +99,47 @@ def admin_required(view):
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    return render_template("index.html", honeypot_field=HONEYPOT_FIELD_NAME)
 
 
 @app.route("/scan", methods=["POST"])
 @limiter.limit("5 per minute; 30 per hour")
 def scan():
+    source_ip = get_remote_address()
+
+    if is_honeypot_triggered(request.form):
+        # A real visitor never fills this field in -- don't tip off
+        # whatever filled it out that it was caught, just fail exactly
+        # like a normal empty-target submission would.
+        log_scan_request(source_ip, request.form.get("target", "")[:200] or "(honeypot, no target)",
+                          "blocked: honeypot")
+        flash("Enter a website URL to scan.")
+        return redirect(url_for("index"))
+
     target = (request.form.get("target") or "").strip()
     if not target:
         flash("Enter a website URL to scan.")
         return redirect(url_for("index"))
 
+    normalized_target = _normalize_url(target)
+    if is_domain_in_cooldown(normalized_target):
+        log_scan_request(source_ip, normalized_target, "blocked: domain cooldown")
+        flash("This site was already scanned recently -- please try again in a little while.")
+        return redirect(url_for("index"))
+
     result = run_scan(target)
 
     if not result.reachable:
+        log_scan_request(source_ip, normalized_target, f"unreachable: {result.error}")
         return render_template("report.html", result=None, error=result.error, target=target)
 
     narrative, source = generate_narrative(result)
     top_finding = max(result.findings, key=lambda f: SEVERITY_RANK[f.severity]) if result.findings else None
     scan_id = save_scan(result, narrative, source)
+    log_scan_request(
+        source_ip, normalized_target,
+        f"grade {result.grade}, score {result.score}/100, {len(result.findings)} finding(s)",
+    )
 
     return render_template(
         "report.html",
@@ -230,7 +257,7 @@ def batch_start():
 
     job_id = secrets.token_urlsafe(8)
     create_job(job_id, targets)
-    threading.Thread(target=run_job, args=(job_id,), daemon=True).start()
+    threading.Thread(target=run_job, args=(job_id, get_remote_address()), daemon=True).start()
 
     return redirect(url_for("batch_view", job_id=job_id))
 
@@ -467,6 +494,16 @@ def active_scan_audit():
     return render_template("active_scan_audit.html", entries=list_active_scan_audit())
 
 
+@app.route("/admin/scan-log", methods=["GET"])
+@admin_required
+def scan_log():
+    return render_template(
+        "scan_log.html", entries=list_scan_requests(),
+        cooldown_max=DOMAIN_COOLDOWN_MAX_REQUESTS,
+        cooldown_window_minutes=DOMAIN_COOLDOWN_WINDOW_MINUTES,
+    )
+
+
 @app.route("/admin/classify", methods=["GET"])
 @admin_required
 def classify_form():
@@ -489,6 +526,10 @@ def classify_start():
 
 @app.errorhandler(429)
 def ratelimit_handler(e):
+    if request.path == "/scan":
+        target = (request.form.get("target") or "").strip()
+        if target:
+            log_scan_request(get_remote_address(), _normalize_url(target), "blocked: rate limit")
     flash("Too many scans from this connection -- please wait a bit and try again.")
     return redirect(url_for("index"))
 

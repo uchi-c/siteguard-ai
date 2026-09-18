@@ -143,7 +143,10 @@
 <div style="height:20px;"></div>
 
 <div class="card">
-  <h3 style="margin-top:0;">Recent scans ({{ scans|length }})</h3>
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+    <h3 style="margin:0;">Recent scans ({{ scans|length }})</h3>
+    <a href="{{ url_for('scan_log') }}" style="font-size:13px;">Scan request log (abuse) &rarr;</a>
+  </div>
   {% if scans %}
   <div class="table-wrap">
     <table class="data-table">

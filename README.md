@@ -65,6 +65,29 @@ email. It only ever drafts; nothing here sends anything automatically —
 you copy it and send it yourself, the same as every other AI-drafted
 message in this app.
 
+### Abuse protection
+
+The free scan is anonymous and frictionless by design -- no login, no
+CAPTCHA -- so it needs its own throttle instead of an account wall:
+
+- **Per-IP rate limiting** on `/scan` (5/minute, 30/hour) and `/batch`
+  (3/hour), via Flask-Limiter, in-memory (resets on redeploy -- fine for
+  throttling, not meant to survive a restart).
+- **Per-domain cooldown**: the same target can't be scanned more than
+  `DOMAIN_COOLDOWN_MAX_REQUESTS` (5) times in `DOMAIN_COOLDOWN_WINDOW_MINUTES`
+  (60) regardless of who's asking -- stops a target from being hammered by
+  spreading requests across IPs, or via `/batch` (the same cooldown applies
+  there too, so wrapping a target in a batch submission isn't a bypass).
+  Configured in `abuse_guard.py`.
+- **Honeypot field**: the scan form has an off-screen `company_website`
+  field real visitors never see or fill in. A bot that auto-fills every
+  input trips it; the failure looks identical to a normal empty-target
+  submission (no tell that it was caught), but it's logged server-side.
+- **Scan request log**: every `/scan` and `/batch` attempt with a real
+  target is logged (source IP, target, timestamp, outcome) -- including
+  ones blocked by the honeypot, cooldown, or rate limiter, not just
+  completed scans. Reviewable at `/admin/scan-log`.
+
 ### Monitoring — autonomous re-scans for a retainer client
 
 Click **Monitor** next to any recent scan in `/admin` and that target gets
@@ -318,11 +341,18 @@ rule-based fallback path.
 - `app.py` — the Flask web app (form → scan → report → lead capture).
 - `storage.py` — saves each scan to `scans.db` (SQLite) and looks it back
   up by ID for the `/report/<id>` shareable link; also saves leads with
-  an editable status/notes pair, and one-time-imports any pre-existing
-  `leads.csv` rows into it.
+  an editable status/notes pair, one-time-imports any pre-existing
+  `leads.csv` rows into it, and logs every scan request (see "Abuse
+  protection" above) for `/admin/scan-log` and the per-domain cooldown.
 - `batch.py` — runs a `/batch` job (multiple scans + outreach drafts) on a
   background thread so the request doesn't have to stay open for minutes;
-  job state is in-memory only, so it resets on restart.
+  job state is in-memory only, so it resets on restart. Applies the same
+  per-domain cooldown and scan-request logging as `/scan` per target, so
+  batching isn't a way around either.
+- `abuse_guard.py` — shared abuse-protection policy for `/scan` and
+  `/batch`: the honeypot field name/check and the per-domain cooldown
+  check (backed by `storage.py`'s `scan_requests` log). See "Abuse
+  protection" above.
 - `active_scan.py` — the gated active-testing probes (see above). Off by
   default; requires `ACTIVE_TESTING_ENABLED=1`, admin login, and a typed
   per-target confirmation even when on. Not passive -- read the section

@@ -8,15 +8,21 @@ and the client polls for progress instead of waiting on one long response.
 Job state lives in an in-memory dict: same "fine for one gunicorn worker,
 resets on restart" tradeoff as the rate limiter in app.py. A batch job only
 needs to survive a few minutes of polling, not a redeploy.
+
+Each target here goes through the same per-domain cooldown and request
+logging as a single /scan -- otherwise /batch would be a free bypass of
+those protections (wrap any target in an 8-line batch and the cooldown
+never triggers). See abuse_guard.py.
 """
 from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
 
+from abuse_guard import is_domain_in_cooldown
 from ai_narrative import generate_narrative, generate_outreach_message
-from scanner import run_scan
-from storage import save_scan
+from scanner import run_scan, _normalize_url
+from storage import log_scan_request, save_scan
 
 MAX_BATCH_TARGETS = 8
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
@@ -46,10 +52,16 @@ def get_job(job_id: str) -> dict | None:
         return dict(job) if job else None
 
 
-def _scan_one(target: str) -> dict:
+def _scan_one(target: str, source_ip: str) -> dict:
+    normalized_target = _normalize_url(target)
+    if is_domain_in_cooldown(normalized_target):
+        log_scan_request(source_ip, normalized_target, "blocked: domain cooldown")
+        return {"status": "error", "error": "This site was already scanned recently -- try again later."}
+
     try:
         result = run_scan(target)
         if not result.reachable:
+            log_scan_request(source_ip, normalized_target, f"unreachable: {result.error}")
             return {"status": "error", "error": result.error}
 
         narrative, source = generate_narrative(result)
@@ -60,6 +72,10 @@ def _scan_one(target: str) -> dict:
             bool(result.findings),
         )
         scan_id = save_scan(result, narrative, source)
+        log_scan_request(
+            source_ip, normalized_target,
+            f"grade {result.grade}, score {result.score}/100, {len(result.findings)} finding(s)",
+        )
         return {
             "status": "done", "scan_id": scan_id, "grade": result.grade,
             "score": result.score, "outreach": outreach_text,
@@ -67,16 +83,17 @@ def _scan_one(target: str) -> dict:
     except Exception as e:
         # A single bad target (or an API hiccup) should never take the rest
         # of the batch down with it.
+        log_scan_request(source_ip, normalized_target, f"unreachable: {e}")
         return {"status": "error", "error": f"Scan failed: {e}"}
 
 
-def run_job(job_id: str) -> None:
+def run_job(job_id: str, source_ip: str) -> None:
     with _lock:
         job = _jobs.get(job_id)
         targets = [i["target"] for i in job["items"]] if job else []
 
     for target in targets:
-        update = _scan_one(target)
+        update = _scan_one(target, source_ip)
         with _lock:
             job = _jobs.get(job_id)
             if not job:

@@ -24,6 +24,127 @@ def test_scan_private_target_is_blocked_by_ssrf_guard(client):
     assert b"private/internal" in resp.data
 
 
+# --- Abuse gate: honeypot, per-domain cooldown, scan-request logging --------
+
+def test_index_includes_honeypot_field(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert b'name="company_website"' in resp.data
+
+
+def test_scan_honeypot_triggered_fails_silently_like_empty_target(client):
+    import storage
+
+    resp = client.post(
+        "/scan",
+        data={"target": "https://example.test", "company_website": "I am a bot"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    assert b"Enter a website URL to scan." in resp.data
+
+    logged = storage.list_scan_requests()
+    assert len(logged) == 1
+    assert logged[0]["result_summary"] == "blocked: honeypot"
+
+
+def test_scan_honeypot_empty_proceeds_normally(client, monkeypatch):
+    _stub_successful_scan(monkeypatch)
+    resp = client.post(
+        "/scan",
+        data={"target": "https://example.test", "company_website": ""},
+    )
+    assert resp.status_code == 200
+    assert b"Missing HSTS header" in resp.data
+
+
+def test_scan_domain_cooldown_blocks_repeat_target(client, monkeypatch):
+    # Drive the cooldown check directly rather than firing
+    # DOMAIN_COOLDOWN_MAX_REQUESTS real POSTs -- that count collides with
+    # /scan's own real "5 per minute" per-IP limit (flask-limiter resolves
+    # RATELIMIT_ENABLED once at extension-init time, so toggling it on the
+    # test client's app.config afterward doesn't actually gate enforcement;
+    # storage is only reset between tests via limiter.reset() in conftest).
+    import storage
+
+    monkeypatch.setattr(app_module, "is_domain_in_cooldown", lambda target: True)
+
+    def fail_if_called(target):
+        raise AssertionError("run_scan should not be called when the target is in cooldown")
+
+    monkeypatch.setattr(app_module, "run_scan", fail_if_called)
+
+    resp = client.post("/scan", data={"target": "https://example.test"}, follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"already scanned recently" in resp.data
+
+    logged = storage.list_scan_requests()
+    assert logged[0]["result_summary"] == "blocked: domain cooldown"
+
+
+def test_scan_logs_unreachable_target(client, monkeypatch):
+    import storage
+    from scanner import ScanResult
+
+    monkeypatch.setattr(app_module, "run_scan", lambda target: ScanResult(
+        target=target, scanned_at="t", findings=[], reachable=False, error="connection refused",
+    ))
+    client.post("/scan", data={"target": "https://unreachable.test"})
+
+    logged = storage.list_scan_requests()
+    assert len(logged) == 1
+    assert logged[0]["result_summary"] == "unreachable: connection refused"
+
+
+def test_scan_logs_successful_scan_summary(client, monkeypatch):
+    import storage
+
+    _stub_successful_scan(monkeypatch)
+    client.post("/scan", data={"target": "https://example.test"})
+
+    logged = storage.list_scan_requests()
+    assert len(logged) == 1
+    assert "grade" in logged[0]["result_summary"]
+    assert "1 finding(s)" in logged[0]["result_summary"]
+
+
+def test_scan_rate_limit_block_is_logged(client):
+    # Exercises ratelimit_handler directly rather than firing enough real
+    # /scan POSTs to trip flask-limiter's actual "5 per minute" window --
+    # that's a real fixed wall-clock window, so a request burst that happens
+    # to straddle a minute boundary can silently not trip it, making an
+    # integration-style version of this test flaky. The 429-triggers-a-block
+    # behavior itself is already covered by
+    # test_scan_rate_limit_blocks_after_five_per_minute; this test only
+    # needs to confirm the errorhandler logs the block.
+    import storage
+
+    with app_module.app.test_request_context(
+        "/scan", method="POST", data={"target": "127.0.0.1"},
+    ):
+        app_module.ratelimit_handler(None)
+
+    logged = storage.list_scan_requests()
+    assert logged[0]["result_summary"] == "blocked: rate limit"
+
+
+def test_admin_scan_log_requires_login(client):
+    resp = client.get("/admin/scan-log")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_admin_scan_log_renders_entries(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/scan", data={"target": "https://example.test", "company_website": "bot"})
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    resp = client.get("/admin/scan-log")
+    assert resp.status_code == 200
+    assert b"blocked: honeypot" in resp.data
+    assert b"example.test" in resp.data
+
+
 def test_report_missing_id_redirects_with_flash(client):
     resp = client.get("/report/does-not-exist", follow_redirects=True)
     assert resp.status_code == 200

@@ -2,10 +2,12 @@
 Persists scan results (so a report can be revisited via a shareable link,
 /report/<id>, instead of being thrown away after the first render), leads
 (email + target + grade/score, plus an editable status/notes pair for
-working them as a pipeline -- new/contacted/quoted/won/lost), and
-monitored targets (a target flagged for recurring re-scans, with the
-result of its last check -- see monitoring.py for the actual re-scan/diff
-logic that reads and writes these rows).
+working them as a pipeline -- new/contacted/quoted/won/lost), monitored
+targets (a target flagged for recurring re-scans, with the result of its
+last check -- see monitoring.py for the actual re-scan/diff logic that
+reads and writes these rows), and a scan-request log (every /scan and
+/batch attempt, including ones blocked by the honeypot/cooldown/rate
+limiter -- see abuse_guard.py) for abuse visibility in /admin.
 
 SQLite on local disk -- ephemeral on a Render free-tier redeploy; fine for
 a link meant to stay useful for days or weeks, and for a lead list you'd
@@ -21,7 +23,7 @@ import secrets
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from scanner import Finding, ScanResult
 
@@ -58,6 +60,14 @@ def _connect():
         "score INTEGER, "
         "status TEXT NOT NULL DEFAULT 'new', "
         "notes TEXT NOT NULL DEFAULT '')"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS scan_requests ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "created_at TEXT NOT NULL, "
+        "source_ip TEXT NOT NULL, "
+        "target TEXT NOT NULL, "
+        "result_summary TEXT NOT NULL)"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS monitored_targets ("
@@ -238,6 +248,43 @@ def list_recent_scans(limit: int = 50) -> list[dict]:
             "score": result.score,
         })
     return out
+
+
+# --- Scan request log (abuse visibility + per-domain cooldown) ---------------
+
+def log_scan_request(source_ip: str, target: str, result_summary: str) -> None:
+    """Records every /scan (and /batch sub-scan) attempt that reaches a
+    real target string -- including ones blocked by the honeypot, domain
+    cooldown, or rate limiter, not just completed scans, so this is an
+    actual abuse-visibility log rather than just a success log. Also the
+    source of truth for count_recent_scan_requests's cooldown check."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO scan_requests (created_at, source_ip, target, result_summary) "
+            "VALUES (?, ?, ?, ?)",
+            (datetime.now(timezone.utc).isoformat(), source_ip, target, result_summary),
+        )
+        conn.commit()
+
+
+def list_scan_requests(limit: int = 200) -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT created_at, source_ip, target, result_summary FROM scan_requests "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [{"created_at": c, "source_ip": ip, "target": t, "result_summary": r} for c, ip, t, r in rows]
+
+
+def count_recent_scan_requests(target: str, since_minutes: int) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=since_minutes)).isoformat()
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM scan_requests WHERE target = ? AND created_at >= ?",
+            (target, cutoff),
+        ).fetchone()
+    return row[0]
 
 
 # --- Monitored targets (autonomous re-scan tracking) -------------------------

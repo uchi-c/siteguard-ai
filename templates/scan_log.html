@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Scan request log{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0;">Scan request log ({{ entries|length }})</h2>
+  <p class="muted" style="font-size:13px;">
+    Every /scan and /batch attempt with a real target, most recent first --
+    including ones blocked by the honeypot, the per-domain cooldown
+    (max {{ cooldown_max }} scans/target/{{ cooldown_window_minutes }}min),
+    or the per-IP rate limit, not just completed scans.
+  </p>
+  {% if entries %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>When (UTC)</th><th>Source IP</th><th>Target</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td class="muted" style="white-space:nowrap;">{{ e.created_at[:19].replace('T', ' ') }}</td>
+          <td class="muted" style="white-space:nowrap;">{{ e.source_ip }}</td>
+          <td style="word-break:break-all;">{{ e.target }}</td>
+          <td style="word-break:break-all; {% if e.result_summary.startswith('blocked') %}color:var(--critical);{% elif e.result_summary.startswith('unreachable') %}color:var(--medium);{% endif %}">
+            {{ e.result_summary }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No scan requests logged yet.</p>
+  {% endif %}
+</div>
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('admin_dashboard') }}">&larr; Back to admin</a></p>
+{% endblock %}
