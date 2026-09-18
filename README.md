@@ -61,9 +61,25 @@ For a lead still sitting at `new`/`contacted`, a **Draft follow-up** button
 has Claude write a short, low-pressure nudge referencing the original
 scan's top finding and how long it's been — same idea as the report page's
 "draft an outreach message," just for someone who already gave their
-email. It only ever drafts; nothing here sends anything automatically —
-you copy it and send it yourself, the same as every other AI-drafted
-message in this app.
+email. That button only ever drafts, for a message you want to review or
+personalize before sending yourself.
+
+Separately, a lead still at `new`/`contacted` also gets **one automatic
+follow-up email**, `FOLLOWUP_DELAY_HOURS` (48) after they submitted,
+if they haven't converted yet (`followups.py`) — the exact same drafted
+message, sent for you rather than left for you to copy-paste. "Converted"
+is read off the lead's own status (no Fiverr/payment integration -- `won`
+or `lost` both mean stop), and each lead gets this at most once, ever
+(tracked in `scans.db`'s `lead_followups` table, visible in `/admin`'s
+Leads table). Off by default until `SMTP_USERNAME`/`SMTP_PASSWORD` are
+set, same as the report email above. An in-process background thread
+checks for due leads every 30 minutes while the app is running -- no
+paid cron needed -- plus a manual **Send due follow-ups now** button in
+`/admin` and a token-guarded `/internal/run-followups` route if you'd
+rather drive it from an external scheduler. On Render's free tier the
+web service sleeps after 15 minutes idle, so an overdue lead is caught
+on the next tick after something wakes it back up, not necessarily at
+exactly 48h -- a nudge a couple days later, not a hard SLA.
 
 ### Abuse protection
 
@@ -342,8 +358,10 @@ rule-based fallback path.
 - `storage.py` — saves each scan to `scans.db` (SQLite) and looks it back
   up by ID for the `/report/<id>` shareable link; also saves leads with
   an editable status/notes pair, one-time-imports any pre-existing
-  `leads.csv` rows into it, and logs every scan request (see "Abuse
-  protection" above) for `/admin/scan-log` and the per-domain cooldown.
+  `leads.csv` rows into it, logs every scan request (see "Abuse
+  protection" above) for `/admin/scan-log` and the per-domain cooldown,
+  and records which leads have already gotten their one-time automatic
+  48h follow-up (`followups.py`) so one is never sent twice.
 - `batch.py` — runs a `/batch` job (multiple scans + outreach drafts) on a
   background thread so the request doesn't have to stay open for minutes;
   job state is in-memory only, so it resets on restart. Applies the same
@@ -371,9 +389,18 @@ rule-based fallback path.
   email. Both this and `js_discovery.py` need `PLAYWRIGHT_BROWSERS_PATH=0`
   set (see below) or Chromium won't be findable at runtime on Render.
 - `emailer.py` — sends a lead their report by email via SMTP (Gmail by
-  default) when they submit the fix-plan form. Off until `SMTP_USERNAME`/
-  `SMTP_PASSWORD` are set; never raises, so a bad config or network hiccup
-  can't break lead capture.
+  default) when they submit the fix-plan form, plus the one-time automatic
+  48h follow-up (`send_followup_email`, used by `followups.py`). Off until
+  `SMTP_USERNAME`/`SMTP_PASSWORD` are set; never raises, so a bad config or
+  network hiccup can't break lead capture.
+- `followups.py` — the one-time automatic 48h lead follow-up: finds leads
+  still at `new`/`contacted` whose window has passed and haven't gotten
+  one yet, drafts the same message the admin-facing "Draft follow-up"
+  button produces, and emails it. Triggered by an in-process background
+  thread in `app.py` (every `FOLLOWUP_CHECK_INTERVAL_SECONDS`), the
+  `/admin/leads/run-followups-now` button, or `/internal/run-followups`
+  (a scheduled job) -- this module is just the actual work, not the
+  trigger, same split as `monitoring.py` below.
 - `monitoring.py` — the autonomous re-scan/diff logic behind "Monitored
   targets" in `/admin`: re-scans a target, diffs findings against its last
   scan, saves the new scan, and records what changed. Triggered by

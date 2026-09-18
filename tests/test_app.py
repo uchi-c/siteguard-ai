@@ -607,6 +607,94 @@ def test_internal_run_monitoring_has_no_csrf_requirement(client, monkeypatch):
         app_module.app.config["WTF_CSRF_ENABLED"] = False
 
 
+# --- Automatic 48h lead follow-up --------------------------------------------
+
+def test_run_followups_now_requires_admin_login(client):
+    resp = client.post("/admin/leads/run-followups-now")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_run_followups_now_with_none_due_flashes(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    monkeypatch.setattr(app_module, "run_followup_check", lambda: [])
+
+    resp = client.post("/admin/leads/run-followups-now", follow_redirects=True)
+    assert b"No leads are due" in resp.data
+
+
+def test_run_followups_now_flashes_summary(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    monkeypatch.setattr(app_module, "run_followup_check", lambda: [
+        {"lead_id": "lead-1", "email": "a@test.com", "status": "sent"},
+        {"lead_id": "lead-2", "email": "b@test.com", "status": "skipped: SMTP not configured"},
+    ])
+
+    resp = client.post("/admin/leads/run-followups-now", follow_redirects=True)
+    assert b"Checked 2 due lead" in resp.data
+    assert b"1 follow-up email" in resp.data
+
+
+def test_internal_run_followups_disabled_when_token_unset(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "")
+    resp = client.post("/internal/run-followups")
+    assert resp.status_code == 503
+
+
+def test_internal_run_followups_rejects_wrong_token(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "the-real-token")
+    resp = client.post("/internal/run-followups", headers={"X-Internal-Token": "wrong-token"})
+    assert resp.status_code == 401
+
+
+def test_internal_run_followups_accepts_correct_token(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "the-real-token")
+    monkeypatch.setattr(app_module, "run_followup_check", lambda: [
+        {"lead_id": "lead-1", "email": "a@test.com", "status": "sent"},
+    ])
+    resp = client.post("/internal/run-followups", headers={"X-Internal-Token": "the-real-token"})
+    assert resp.status_code == 200
+    assert resp.get_json()["checked"] == 1
+
+
+def test_internal_run_followups_has_no_csrf_requirement(client, monkeypatch):
+    monkeypatch.setattr(app_module, "INTERNAL_JOB_TOKEN", "the-real-token")
+    monkeypatch.setattr(app_module, "run_followup_check", lambda: [])
+    app_module.app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        resp = client.post("/internal/run-followups", headers={"X-Internal-Token": "the-real-token"})
+        assert resp.status_code == 200
+    finally:
+        app_module.app.config["WTF_CSRF_ENABLED"] = False
+
+
+def test_admin_dashboard_shows_followup_sent_status(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/lead", data={
+        "email": "prospect@test.com", "target": "https://example.test",
+        "grade": "C", "score": "63",
+    })
+    import storage
+    lead_id = storage.list_leads()[0]["id"]
+    storage.record_lead_followup_sent(lead_id, "following up...", "rule-based")
+
+    client.post("/admin/login", data={"password": "correct-horse"})
+    resp = client.get("/admin")
+    assert b"Sent " in resp.data
+
+
+def test_admin_dashboard_notes_when_smtp_not_configured(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    monkeypatch.setattr(app_module.emailer, "SMTP_USERNAME", "")
+    monkeypatch.setattr(app_module.emailer, "SMTP_PASSWORD", "")
+    client.post("/admin/login", data={"password": "correct-horse"})
+
+    resp = client.get("/admin")
+    assert b"Off right now" in resp.data
+
+
 # --- Report email on lead capture --------------------------------------------
 
 def test_lead_without_scan_id_does_not_start_an_email_thread(client, monkeypatch):

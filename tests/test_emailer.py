@@ -78,3 +78,43 @@ def test_send_report_email_returns_false_on_smtp_error(monkeypatch):
             "lead@example.test", "example.test", "B", 82, "https://x.test/report/abc",
         )
     assert result is False
+
+
+# --- Automatic 48h lead follow-up ---------------------------------------------
+
+def test_send_followup_email_skips_when_not_configured(monkeypatch):
+    monkeypatch.setattr(emailer, "SMTP_USERNAME", "")
+    monkeypatch.setattr(emailer, "SMTP_PASSWORD", "")
+    with patch("smtplib.SMTP") as smtp_cls:
+        result = emailer.send_followup_email("lead@example.test", "example.test", "just checking in...")
+        assert result is False
+        smtp_cls.assert_not_called()
+
+
+def test_send_followup_email_wraps_message_with_greeting_and_signature(monkeypatch):
+    monkeypatch.setattr(emailer, "SMTP_USERNAME", "bot@example.test")
+    monkeypatch.setattr(emailer, "SMTP_PASSWORD", "app-password")
+    monkeypatch.setattr(emailer, "SMTP_FROM", "bot@example.test")
+
+    mock_server = MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    with patch("smtplib.SMTP", return_value=mock_server):
+        result = emailer.send_followup_email("lead@example.test", "example.test", "just checking in...")
+
+    assert result is True
+    mock_server.login.assert_called_once_with("bot@example.test", "app-password")
+    sent_msg = mock_server.send_message.call_args[0][0]
+    assert sent_msg["To"] == "lead@example.test"
+    assert "example.test" in sent_msg["Subject"]
+    body = sent_msg.get_content()
+    assert "just checking in..." in body
+    assert "SiteGuard AI" in body
+
+
+def test_send_followup_email_returns_false_on_smtp_error(monkeypatch):
+    monkeypatch.setattr(emailer, "SMTP_USERNAME", "bot@example.test")
+    monkeypatch.setattr(emailer, "SMTP_PASSWORD", "app-password")
+
+    with patch("smtplib.SMTP", side_effect=OSError("connection refused")):
+        result = emailer.send_followup_email("lead@example.test", "example.test", "just checking in...")
+    assert result is False

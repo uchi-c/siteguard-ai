@@ -44,12 +44,30 @@
 <div style="height:20px;"></div>
 
 <div class="card">
-  <h3 style="margin-top:0;">Leads ({{ leads|length }})</h3>
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+    <h3 style="margin:0;">Leads ({{ leads|length }})</h3>
+    {% if leads %}
+    <form method="post" action="{{ url_for('run_followups_now') }}" style="width:auto;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-secondary btn-sm">Send due follow-ups now</button>
+    </form>
+    {% endif %}
+  </div>
+  <p class="muted" style="font-size:13px; margin:10px 0 0;">
+    A lead still at new/contacted gets one automatic follow-up email
+    {{ followup_delay_hours }} hours after they submit -- no need to
+    click anything. This button just runs that check immediately instead
+    of waiting for the next automatic tick.
+    {% if not smtp_configured %}
+    <strong>Off right now</strong> -- set <code>SMTP_USERNAME</code>/<code>SMTP_PASSWORD</code> to enable it.
+    {% endif %}
+  </p>
   {% if leads %}
+  <div style="height:14px;"></div>
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>When (UTC)</th><th>Email</th><th>Site</th><th>Grade</th><th>Score</th><th>Status</th><th>Notes</th><th></th></tr>
+        <tr><th>When (UTC)</th><th>Email</th><th>Site</th><th>Grade</th><th>Score</th><th>Status</th><th>Notes</th><th>Auto follow-up</th><th></th></tr>
       </thead>
       <tbody>
         {% for lead in leads %}
@@ -76,8 +94,17 @@
               <button type="submit" class="btn-secondary btn-sm">Save</button>
             </form>
           </td>
+          <td class="muted" style="white-space:nowrap; font-size:12.5px;">
+            {% if lead.id in followups_sent %}
+            <span style="color:var(--accent);">Sent {{ followups_sent[lead.id].sent_at[:10] }}</span>
+            {% elif lead.status in followup_eligible_statuses %}
+            Pending
+            {% else %}
+            &mdash;
+            {% endif %}
+          </td>
           <td style="white-space:nowrap;">
-            {% if lead.status in ('new', 'contacted') %}
+            {% if lead.status in followup_eligible_statuses %}
             <button type="button" class="btn-secondary btn-sm draft-followup-btn"
               data-lead-id="{{ lead.id }}" data-email="{{ lead.email }}">Draft follow-up</button>
             {% endif %}

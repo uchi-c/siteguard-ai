@@ -5,9 +5,12 @@ Persists scan results (so a report can be revisited via a shareable link,
 working them as a pipeline -- new/contacted/quoted/won/lost), monitored
 targets (a target flagged for recurring re-scans, with the result of its
 last check -- see monitoring.py for the actual re-scan/diff logic that
-reads and writes these rows), and a scan-request log (every /scan and
+reads and writes these rows), a scan-request log (every /scan and
 /batch attempt, including ones blocked by the honeypot/cooldown/rate
-limiter -- see abuse_guard.py) for abuse visibility in /admin.
+limiter -- see abuse_guard.py) for abuse visibility in /admin, and a
+lead-followups log recording which leads have already gotten their
+one-time automatic 48h nudge (see followups.py), so a lead is never
+emailed twice by the scheduler.
 
 SQLite on local disk -- ephemeral on a Render free-tier redeploy; fine for
 a link meant to stay useful for days or weeks, and for a lead list you'd
@@ -68,6 +71,13 @@ def _connect():
         "source_ip TEXT NOT NULL, "
         "target TEXT NOT NULL, "
         "result_summary TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS lead_followups ("
+        "lead_id TEXT PRIMARY KEY, "
+        "sent_at TEXT NOT NULL, "
+        "message TEXT NOT NULL, "
+        "source TEXT NOT NULL)"
     )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS monitored_targets ("
@@ -285,6 +295,37 @@ def count_recent_scan_requests(target: str, since_minutes: int) -> int:
             (target, cutoff),
         ).fetchone()
     return row[0]
+
+
+# --- Lead follow-ups (one-time automatic 48h nudge) --------------------------
+
+def record_lead_followup_sent(lead_id: str, message: str, source: str) -> None:
+    """One row per lead, ever -- INSERT OR REPLACE so a retry after a rare
+    failure-then-success doesn't need a separate upsert path, but in
+    practice this is only called once a send actually succeeds."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO lead_followups (lead_id, sent_at, message, source) "
+            "VALUES (?, ?, ?, ?)",
+            (lead_id, datetime.now(timezone.utc).isoformat(), message, source),
+        )
+        conn.commit()
+
+
+def has_lead_followup_been_sent(lead_id: str) -> bool:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM lead_followups WHERE lead_id = ?", (lead_id,)
+        ).fetchone()
+    return row is not None
+
+
+def list_lead_followups() -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT lead_id, sent_at, message, source FROM lead_followups ORDER BY sent_at DESC"
+        ).fetchall()
+    return [{"lead_id": r[0], "sent_at": r[1], "message": r[2], "source": r[3]} for r in rows]
 
 
 # --- Monitored targets (autonomous re-scan tracking) -------------------------

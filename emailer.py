@@ -68,6 +68,31 @@ def send_report_email(
         return False
 
 
+def send_followup_email(to_email: str, target: str, message: str) -> bool:
+    """Sends the automatic one-time 48h follow-up to a lead who hasn't
+    converted yet (see followups.py). `message` is the same drafted text
+    the admin-facing "Draft follow-up" button produces (a bare paragraph
+    meant to be pasted into an email or DM, not a full email -- see
+    ai_narrative.SYSTEM_PROMPT_FOLLOWUP), so it's wrapped with a greeting
+    and signature here instead of sent as-is. Same never-raises contract."""
+    if not is_configured():
+        return False
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = f"Following up on your SiteGuard AI report for {target}"
+        msg["From"] = SMTP_FROM
+        msg["To"] = to_email
+        msg.set_content(f"Hi,\n\n{message}\n\n-- SiteGuard AI")
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as s:
+            s.starttls()
+            s.login(SMTP_USERNAME, SMTP_PASSWORD)
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
 def send_plain_email(to_email: str, subject: str, body: str) -> bool:
     """A minimal, general-purpose send for operator-facing alerts (e.g. the
     monitoring digest, sent only to the operator's own inbox, never a

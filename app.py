@@ -15,7 +15,9 @@ Then open http://localhost:5000
 import hmac
 import os
 import secrets
+import sys
 import threading
+import time
 from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import urlparse
@@ -39,7 +41,7 @@ from storage import (
     log_active_scan_authorization, list_active_scan_audit,
     save_lead, list_leads, get_lead, update_lead, import_leads_csv_once, LEAD_STATUSES,
     add_monitored_target, list_monitored_targets, remove_monitored_target, is_monitored,
-    log_scan_request, list_scan_requests,
+    log_scan_request, list_scan_requests, list_lead_followups,
 )
 from abuse_guard import (
     is_honeypot_triggered, is_domain_in_cooldown, HONEYPOT_FIELD_NAME,
@@ -47,6 +49,10 @@ from abuse_guard import (
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
 from monitoring import run_monitoring_check
+from followups import (
+    run_followup_check, FOLLOWUP_DELAY_HOURS,
+    ELIGIBLE_STATUSES as ELIGIBLE_FOLLOWUP_STATUSES,
+)
 import active_scan_job
 import pdf_export
 import emailer
@@ -60,10 +66,19 @@ SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 # operator explicitly sets it -- adding the route doesn't make it usable.
 ACTIVE_TESTING_ENABLED = os.environ.get("ACTIVE_TESTING_ENABLED") == "1"
 
-# Shared secret for /internal/run-monitoring -- an app-generated token, not
-# a personal credential, so it's fine to set programmatically. Unset means
-# the route refuses to run at all rather than accepting an empty token.
+# Shared secret for /internal/run-monitoring and /internal/run-followups --
+# an app-generated token, not a personal credential, so it's fine to set
+# programmatically. Unset means both routes refuse to run at all rather
+# than accepting an empty token.
 INTERNAL_JOB_TOKEN = os.environ.get("INTERNAL_JOB_TOKEN", "")
+
+# How often the in-process background thread checks for leads due their
+# one-time automatic 48h follow-up (followups.py). Runs only while this
+# process is alive -- on Render's free tier the web service sleeps after
+# 15 minutes idle, so an overdue lead is caught on the next tick after
+# something wakes it back up, not necessarily at exactly 48h. Good enough
+# for "a nudge a couple days later," not a hard SLA.
+FOLLOWUP_CHECK_INTERVAL_SECONDS = 30 * 60
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
@@ -323,6 +338,10 @@ def admin_dashboard():
         monitored_targets=monitored,
         monitored_target_set={m["target"] for m in monitored},
         monitoring_configured=bool(INTERNAL_JOB_TOKEN),
+        followups_sent={f["lead_id"]: f for f in list_lead_followups()},
+        followup_eligible_statuses=ELIGIBLE_FOLLOWUP_STATUSES,
+        followup_delay_hours=FOLLOWUP_DELAY_HOURS,
+        smtp_configured=emailer.is_configured(),
     )
 
 
@@ -424,6 +443,34 @@ def run_monitoring_internal():
     if not hmac.compare_digest(provided, INTERNAL_JOB_TOKEN):
         return {"error": "unauthorized"}, 401
     results = run_monitoring_check()
+    return {"checked": len(results), "results": results}
+
+
+@app.route("/admin/leads/run-followups-now", methods=["POST"])
+@admin_required
+def run_followups_now():
+    results = run_followup_check()
+    sent = sum(1 for r in results if r["status"] == "sent")
+    if not results:
+        flash("No leads are due their follow-up yet.")
+    else:
+        flash(f"Checked {len(results)} due lead(s): {sent} follow-up email(s) sent.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/internal/run-followups", methods=["POST"])
+@csrf.exempt
+@limiter.limit("10 per hour")
+def run_followups_internal():
+    """Same trigger pattern as /internal/run-monitoring -- an external
+    scheduler, not a browser, so it's guarded by the same shared secret
+    instead of a CSRF token or admin session."""
+    if not INTERNAL_JOB_TOKEN:
+        return {"error": "follow-ups are not configured on this deployment"}, 503
+    provided = request.headers.get("X-Internal-Token", "")
+    if not hmac.compare_digest(provided, INTERNAL_JOB_TOKEN):
+        return {"error": "unauthorized"}, 401
+    results = run_followup_check()
     return {"checked": len(results), "results": results}
 
 
@@ -580,6 +627,27 @@ def lead():
             ).start()
         flash("Got it -- we'll reach out with a fix plan shortly.")
     return redirect(url_for("index"))
+
+
+def _followup_scheduler_loop() -> None:
+    while True:
+        time.sleep(FOLLOWUP_CHECK_INTERVAL_SECONDS)
+        try:
+            run_followup_check()
+        except Exception:
+            pass
+
+
+# Started at import time, not inside `if __name__ == "__main__"`, because
+# production runs this module via gunicorn ("gunicorn app:app"), which
+# imports it and never executes that block -- import time is the only
+# reliable "the app just started" hook available without a separate
+# gunicorn server-hook config. Skipped under pytest so the test suite
+# never has a live thread hitting the real DB/SMTP in the background;
+# every test that needs this behavior calls followups.run_followup_check
+# directly instead.
+if "pytest" not in sys.modules:
+    threading.Thread(target=_followup_scheduler_loop, daemon=True).start()
 
 
 if __name__ == "__main__":

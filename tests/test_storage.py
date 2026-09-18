@@ -288,3 +288,46 @@ def test_count_recent_scan_requests_excludes_entries_outside_window(tmp_path, mo
         conn.commit()
 
     assert storage.count_recent_scan_requests("https://stale.test", 60) == 0
+
+
+# --- Lead follow-ups (one-time automatic 48h nudge) --------------------------
+
+def test_has_lead_followup_been_sent_false_before_recorded(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    assert storage.has_lead_followup_been_sent("lead-1") is False
+
+
+def test_record_and_check_lead_followup_sent(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.record_lead_followup_sent("lead-1", "following up...", "rule-based")
+
+    assert storage.has_lead_followup_been_sent("lead-1") is True
+    assert storage.has_lead_followup_been_sent("lead-2") is False
+
+    entries = storage.list_lead_followups()
+    assert len(entries) == 1
+    assert entries[0]["lead_id"] == "lead-1"
+    assert entries[0]["message"] == "following up..."
+    assert entries[0]["source"] == "rule-based"
+    assert entries[0]["sent_at"]
+
+
+def test_list_lead_followups_orders_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.record_lead_followup_sent("lead-1", "first", "rule-based")
+    time.sleep(0.01)
+    storage.record_lead_followup_sent("lead-2", "second", "rule-based")
+
+    entries = storage.list_lead_followups()
+    assert [e["lead_id"] for e in entries] == ["lead-2", "lead-1"]
+
+
+def test_record_lead_followup_sent_is_idempotent_per_lead(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.record_lead_followup_sent("lead-1", "first attempt", "rule-based")
+    storage.record_lead_followup_sent("lead-1", "second attempt", "ai")
+
+    entries = storage.list_lead_followups()
+    assert len(entries) == 1
+    assert entries[0]["message"] == "second attempt"
+    assert entries[0]["source"] == "ai"
