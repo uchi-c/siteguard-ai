@@ -107,33 +107,58 @@ CAPTCHA -- so it needs its own throttle instead of an account wall:
 ### Monitoring — autonomous re-scans for a retainer client
 
 Click **Monitor** next to any recent scan in `/admin` and that target gets
-re-scanned periodically (`monitoring.py`), diffed against its last scan,
-with what changed (new findings, resolved findings) shown right in the
-"Monitored targets" table — Claude writes a one-line digest when something
-actually changes (`ai_narrative.generate_monitoring_digest`). This is the
-actual retainer/ongoing-monitoring offer, running for real instead of
-being something you'd have to remember to do by hand.
+re-scanned on its own schedule (`monitoring.py`), diffed against its last
+scan, with what changed (new findings, resolved findings) shown right in
+the "Monitored targets" table — Claude writes a one-line digest when
+something actually changes (`ai_narrative.generate_monitoring_digest`).
+This is the actual retainer/ongoing-monitoring offer, running for real
+instead of being something you'd have to remember to do by hand.
 
-**Nothing here emails or notifies a client automatically.** Changes just
-show up in `/admin` for you to review and decide what to send — the one
-exception is `MONITORING_ALERT_EMAIL` (optional): if set, a short digest
-goes to *your own* inbox when something changes, same as the operator
-emailing themselves anything else in this app.
+Each monitored target picks its own re-scan interval, **weekly or
+monthly** (`monitor_intervals`/`interval`, set right in that target's row
+in `/admin` alongside its client alert email — see below), stored in
+`scans.db`'s `monitored_target_config` table. A check only actually
+re-scans a target once its own interval has elapsed since the last check;
+"Run check now" bypasses that and checks everything immediately.
 
-Two ways a check actually runs:
-- **On demand** — the "Run check now" button in `/admin`, no setup needed.
-- **On a schedule** — a `POST /internal/run-monitoring` request triggers a
-  check of every monitored target. It's guarded by a shared secret
-  (`INTERNAL_JOB_TOKEN` — an app-generated token, not a personal
-  credential; generate one yourself and set it in your env, see
-  `.env.example`) checked against an `X-Internal-Token` header, since a
-  cron job has no browser session or CSRF token. Unset, the endpoint
-  refuses to run — the manual button above works either way.
+**Two alert paths on a real change**, independent of each other:
+- **Direct to the client** — set a client email on a monitored target
+  (optional) and they get emailed automatically the moment a check finds
+  something (`emailer.send_monitoring_alert_email`) — this is the actual
+  value of a paid monitoring retainer: "we'll tell you if something
+  changes," not "you have to remember to check." Off until
+  `SMTP_USERNAME`/`SMTP_PASSWORD` are set, and only for a target you've
+  explicitly given an email; leave it blank to keep that target
+  review-only.
+- **To you, the operator** — `MONITORING_ALERT_EMAIL` (optional): if set,
+  a short combined digest goes to *your own* inbox whenever anything
+  changes across any monitored target, regardless of whether that target
+  also has a client email configured — same as the operator emailing
+  themselves anything else in this app.
 
-  To actually schedule it, add a Render Cron Job (Render dashboard → New →
-  Cron Job, or the `create_cron_job` API) pointed at this repo, running on
-  whatever cadence you want (daily is plenty for most retainer clients), with
-  a trivial start command that just POSTs to your deployed app:
+Three ways a check actually runs, same pattern as the automatic lead
+follow-up above:
+- **On demand** — the "Run check now" button in `/admin`, no setup needed,
+  bypasses every target's own schedule.
+- **Automatically** — an in-process background thread in `app.py` checks
+  every `SCHEDULER_TICK_SECONDS` (30 min) for any monitored target whose
+  interval has elapsed, while the app is running. No paid cron needed.
+  Same free-tier caveat as the lead follow-up: the web service sleeps
+  after 15 minutes idle, so an overdue check happens on the next tick
+  after something wakes it back up, not necessarily right on schedule.
+- **From an external scheduler** — a `POST /internal/run-monitoring`
+  request also triggers a (schedule-respecting) check of every monitored
+  target. Guarded by a shared secret (`INTERNAL_JOB_TOKEN` — an
+  app-generated token, not a personal credential; generate one yourself
+  and set it in your env, see `.env.example`) checked against an
+  `X-Internal-Token` header, since a cron job has no browser session or
+  CSRF token. Unset, the endpoint refuses to run.
+
+  To wire this up anyway (e.g. for more precise timing than the in-process
+  thread can offer on a free-tier dyno that sleeps), add a Render Cron Job
+  (Render dashboard → New → Cron Job, or the `create_cron_job` API)
+  pointed at this repo, with a trivial start command that just POSTs to
+  your deployed app:
   ```
   python -c "import os, urllib.request as u; r = u.Request(os.environ['TARGET_URL'] + '/internal/run-monitoring', method='POST', headers={'X-Internal-Token': os.environ['TOKEN']}); u.urlopen(r)"
   ```
@@ -141,8 +166,8 @@ Two ways a check actually runs:
   value as `INTERNAL_JOB_TOKEN` on the web service) as env vars on the cron
   job itself. **Unlike the web service, Render Cron Jobs have no free
   tier** — the cheapest is the `starter` plan (a small recurring cost).
-  Until/unless that's worth it to you, the manual "Run check now" button
-  covers the same ground for free.
+  Until/unless that's worth it to you, the in-process scheduler and the
+  manual "Run check now" button already cover the same ground for free.
 
 ### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
 
@@ -360,8 +385,11 @@ rule-based fallback path.
   an editable status/notes pair, one-time-imports any pre-existing
   `leads.csv` rows into it, logs every scan request (see "Abuse
   protection" above) for `/admin/scan-log` and the per-domain cooldown,
-  and records which leads have already gotten their one-time automatic
-  48h follow-up (`followups.py`) so one is never sent twice.
+  records which leads have already gotten their one-time automatic 48h
+  follow-up (`followups.py`) so one is never sent twice, and keeps each
+  monitored target's re-scan interval and client alert email in its own
+  table (`monitoring.py`) rather than as columns on the already-deployed
+  `monitored_targets`.
 - `batch.py` — runs a `/batch` job (multiple scans + outreach drafts) on a
   background thread so the request doesn't have to stay open for minutes;
   job state is in-memory only, so it resets on restart. Applies the same
@@ -390,23 +418,27 @@ rule-based fallback path.
   set (see below) or Chromium won't be findable at runtime on Render.
 - `emailer.py` — sends a lead their report by email via SMTP (Gmail by
   default) when they submit the fix-plan form, plus the one-time automatic
-  48h follow-up (`send_followup_email`, used by `followups.py`). Off until
-  `SMTP_USERNAME`/`SMTP_PASSWORD` are set; never raises, so a bad config or
-  network hiccup can't break lead capture.
+  48h follow-up (`send_followup_email`, used by `followups.py`) and the
+  direct-to-client monitoring alert (`send_monitoring_alert_email`, used
+  by `monitoring.py`). Off until `SMTP_USERNAME`/`SMTP_PASSWORD` are set;
+  never raises, so a bad config or network hiccup can't break lead capture.
 - `followups.py` — the one-time automatic 48h lead follow-up: finds leads
   still at `new`/`contacted` whose window has passed and haven't gotten
   one yet, drafts the same message the admin-facing "Draft follow-up"
-  button produces, and emails it. Triggered by an in-process background
-  thread in `app.py` (every `FOLLOWUP_CHECK_INTERVAL_SECONDS`), the
+  button produces, and emails it. Triggered by the shared in-process
+  background thread in `app.py` (every `SCHEDULER_TICK_SECONDS`), the
   `/admin/leads/run-followups-now` button, or `/internal/run-followups`
   (a scheduled job) -- this module is just the actual work, not the
   trigger, same split as `monitoring.py` below.
 - `monitoring.py` — the autonomous re-scan/diff logic behind "Monitored
-  targets" in `/admin`: re-scans a target, diffs findings against its last
-  scan, saves the new scan, and records what changed. Triggered by
-  `/admin/monitoring/run-now` (manual) or `/internal/run-monitoring` (a
-  scheduled job) in `app.py` -- this module is just the actual work, not
-  the trigger.
+  targets" in `/admin`: re-scans a target once its own weekly/monthly
+  interval has elapsed, diffs findings against its last scan, saves the
+  new scan, records what changed, and alerts the target's client email
+  (if one's configured) plus the operator digest (if
+  `MONITORING_ALERT_EMAIL` is set). Triggered by the shared in-process
+  background thread in `app.py`, `/admin/monitoring/run-now` (manual,
+  bypasses the schedule), or `/internal/run-monitoring` (a scheduled job,
+  respects it) -- this module is just the actual work, not the trigger.
 - `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`

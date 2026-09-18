@@ -93,6 +93,48 @@ def send_followup_email(to_email: str, target: str, message: str) -> bool:
         return False
 
 
+def send_monitoring_alert_email(
+    to_email: str, target: str, grade: str, score: int,
+    new_count: int, resolved_count: int, digest: str, report_url: str,
+) -> bool:
+    """Sent directly to a monitoring client when a scheduled re-scan finds
+    a real change (see monitoring.py) -- this is the actual value of the
+    paid monitoring tier ("we'll tell you if something changes"), separate
+    from the operator-only digest below which still goes out unchanged.
+    Same never-raises contract."""
+    if not is_configured():
+        return False
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = f"SiteGuard AI monitoring alert: {target} (grade {grade})"
+        msg["From"] = SMTP_FROM
+        msg["To"] = to_email
+
+        change_lines = []
+        if new_count:
+            change_lines.append(f"- {new_count} new finding(s)")
+        if resolved_count:
+            change_lines.append(f"- {resolved_count} finding(s) resolved")
+
+        body = (
+            f"Your monitored site {target} was just re-scanned -- here's what changed:\n\n"
+            + "\n".join(change_lines) + "\n\n"
+            f"Current grade: {grade}  ({score}/100)\n\n"
+            + (digest + "\n\n" if digest else "")
+            + (f"Full report: {report_url}\n\n" if report_url else "")
+            + "-- SiteGuard AI"
+        )
+        msg.set_content(body)
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as s:
+            s.starttls()
+            s.login(SMTP_USERNAME, SMTP_PASSWORD)
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
 def send_plain_email(to_email: str, subject: str, body: str) -> bool:
     """A minimal, general-purpose send for operator-facing alerts (e.g. the
     monitoring digest, sent only to the operator's own inbox, never a

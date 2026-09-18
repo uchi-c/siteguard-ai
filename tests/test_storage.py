@@ -331,3 +331,45 @@ def test_record_lead_followup_sent_is_idempotent_per_lead(tmp_path, monkeypatch)
     assert len(entries) == 1
     assert entries[0]["message"] == "second attempt"
     assert entries[0]["source"] == "ai"
+
+
+# --- Monitored-target config (re-scan interval + client alert email) --------
+
+def test_list_monitored_target_configs_empty_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    assert storage.list_monitored_target_configs() == {}
+    assert target_id  # sanity: target itself was created fine with no config row
+
+
+def test_set_and_list_monitored_target_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    storage.set_monitored_target_config(target_id, "monthly", "client@business.test")
+
+    configs = storage.list_monitored_target_configs()
+    assert configs[target_id] == {
+        "target_id": target_id, "interval": "monthly", "client_email": "client@business.test",
+    }
+
+
+def test_set_monitored_target_config_upserts(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    storage.set_monitored_target_config(target_id, "weekly", "old@business.test")
+    storage.set_monitored_target_config(target_id, "monthly", "new@business.test")
+
+    configs = storage.list_monitored_target_configs()
+    assert len(configs) == 1
+    assert configs[target_id]["interval"] == "monthly"
+    assert configs[target_id]["client_email"] == "new@business.test"
+
+
+def test_remove_monitored_target_cascades_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    storage.set_monitored_target_config(target_id, "weekly", "client@business.test")
+
+    storage.remove_monitored_target(target_id)
+
+    assert storage.list_monitored_target_configs() == {}

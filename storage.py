@@ -5,7 +5,10 @@ Persists scan results (so a report can be revisited via a shareable link,
 working them as a pipeline -- new/contacted/quoted/won/lost), monitored
 targets (a target flagged for recurring re-scans, with the result of its
 last check -- see monitoring.py for the actual re-scan/diff logic that
-reads and writes these rows), a scan-request log (every /scan and
+reads and writes these rows) plus a separate per-target config (re-scan
+interval, client email for direct alerts -- kept in its own table rather
+than added as columns on the already-deployed monitored_targets, same
+reasoning as every other table here), a scan-request log (every /scan and
 /batch attempt, including ones blocked by the honeypot/cooldown/rate
 limiter -- see abuse_guard.py) for abuse visibility in /admin, and a
 lead-followups log recording which leads have already gotten their
@@ -89,6 +92,12 @@ def _connect():
         "last_new_count INTEGER NOT NULL DEFAULT 0, "
         "last_resolved_count INTEGER NOT NULL DEFAULT 0, "
         "last_digest TEXT NOT NULL DEFAULT '')"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS monitored_target_config ("
+        "target_id TEXT PRIMARY KEY, "
+        "interval TEXT NOT NULL DEFAULT 'weekly', "
+        "client_email TEXT NOT NULL DEFAULT '')"
     )
     return conn
 
@@ -377,8 +386,33 @@ def is_monitored(target: str) -> bool:
 def remove_monitored_target(target_id: str) -> bool:
     with closing(_connect()) as conn:
         cur = conn.execute("DELETE FROM monitored_targets WHERE id = ?", (target_id,))
+        conn.execute("DELETE FROM monitored_target_config WHERE target_id = ?", (target_id,))
         conn.commit()
         return cur.rowcount > 0
+
+
+def set_monitored_target_config(target_id: str, interval: str, client_email: str) -> None:
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO monitored_target_config (target_id, interval, client_email) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(target_id) DO UPDATE SET interval = excluded.interval, "
+            "client_email = excluded.client_email",
+            (target_id, interval, client_email),
+        )
+        conn.commit()
+
+
+def list_monitored_target_configs() -> dict[str, dict]:
+    """Keyed by target_id -- monitoring.py joins this against
+    list_monitored_targets() in Python rather than a SQL join, since a
+    target with no config row yet (added before this existed, or never
+    configured) should just fall back to defaults, not be excluded."""
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT target_id, interval, client_email FROM monitored_target_config"
+        ).fetchall()
+    return {r[0]: {"target_id": r[0], "interval": r[1], "client_email": r[2]} for r in rows}
 
 
 def record_monitor_check(

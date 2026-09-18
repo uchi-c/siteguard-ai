@@ -14,12 +14,13 @@ has passed. Each lead gets AT MOST ONE automatic follow-up ever (tracked
 in storage.py's lead_followups table), never a drip sequence.
 
 Triggered three ways: an in-process background timer started in app.py
-(runs every FOLLOWUP_CHECK_INTERVAL_SECONDS while the dyno is awake --
-no paid cron needed for this one), /admin's manual "Send due follow-ups
-now" button, and a token-guarded /internal/run-followups route for an
-external scheduler if one is ever configured (see the README's
-Monitoring section for why a real Render Cron Job costs money on this
-plan and isn't set up by default -- same tradeoff would apply here).
+(shared with monitoring.py's own scheduled checks -- runs every
+SCHEDULER_TICK_SECONDS while the dyno is awake, no paid cron needed for
+this one), /admin's manual "Send due follow-ups now" button, and a
+token-guarded /internal/run-followups route for an external scheduler if
+one is ever configured (see the README's Monitoring section for why a
+real Render Cron Job costs money on this plan and isn't set up by
+default -- same tradeoff would apply here).
 """
 from __future__ import annotations
 

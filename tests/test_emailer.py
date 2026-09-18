@@ -118,3 +118,66 @@ def test_send_followup_email_returns_false_on_smtp_error(monkeypatch):
     with patch("smtplib.SMTP", side_effect=OSError("connection refused")):
         result = emailer.send_followup_email("lead@example.test", "example.test", "just checking in...")
     assert result is False
+
+
+# --- Direct client alert on a monitoring re-scan (paid retainer) -------------
+
+def test_send_monitoring_alert_email_skips_when_not_configured(monkeypatch):
+    monkeypatch.setattr(emailer, "SMTP_USERNAME", "")
+    monkeypatch.setattr(emailer, "SMTP_PASSWORD", "")
+    with patch("smtplib.SMTP") as smtp_cls:
+        result = emailer.send_monitoring_alert_email(
+            "client@business.test", "example.test", "B", 82, 1, 0, "digest text", "https://x.test/report/abc",
+        )
+        assert result is False
+        smtp_cls.assert_not_called()
+
+
+def test_send_monitoring_alert_email_includes_change_counts_and_report_link(monkeypatch):
+    monkeypatch.setattr(emailer, "SMTP_USERNAME", "bot@example.test")
+    monkeypatch.setattr(emailer, "SMTP_PASSWORD", "app-password")
+    monkeypatch.setattr(emailer, "SMTP_FROM", "bot@example.test")
+
+    mock_server = MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    with patch("smtplib.SMTP", return_value=mock_server):
+        result = emailer.send_monitoring_alert_email(
+            "client@business.test", "example.test", "B", 82, 2, 1, "Two new issues appeared.",
+            "https://x.test/report/abc",
+        )
+
+    assert result is True
+    sent_msg = mock_server.send_message.call_args[0][0]
+    assert sent_msg["To"] == "client@business.test"
+    assert "example.test" in sent_msg["Subject"]
+    body = sent_msg.get_content()
+    assert "2 new finding(s)" in body
+    assert "1 finding(s) resolved" in body
+    assert "Two new issues appeared." in body
+    assert "https://x.test/report/abc" in body
+
+
+def test_send_monitoring_alert_email_omits_report_link_when_blank(monkeypatch):
+    monkeypatch.setattr(emailer, "SMTP_USERNAME", "bot@example.test")
+    monkeypatch.setattr(emailer, "SMTP_PASSWORD", "app-password")
+
+    mock_server = MagicMock()
+    mock_server.__enter__.return_value = mock_server
+    with patch("smtplib.SMTP", return_value=mock_server):
+        result = emailer.send_monitoring_alert_email(
+            "client@business.test", "example.test", "B", 82, 1, 0, "", "",
+        )
+    assert result is True
+    sent_msg = mock_server.send_message.call_args[0][0]
+    assert "Full report:" not in sent_msg.get_content()
+
+
+def test_send_monitoring_alert_email_returns_false_on_smtp_error(monkeypatch):
+    monkeypatch.setattr(emailer, "SMTP_USERNAME", "bot@example.test")
+    monkeypatch.setattr(emailer, "SMTP_PASSWORD", "app-password")
+
+    with patch("smtplib.SMTP", side_effect=OSError("connection refused")):
+        result = emailer.send_monitoring_alert_email(
+            "client@business.test", "example.test", "B", 82, 1, 0, "digest", "https://x.test/report/abc",
+        )
+    assert result is False

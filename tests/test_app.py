@@ -556,13 +556,16 @@ def test_run_monitoring_now_checks_targets_and_flashes_summary(client, monkeypat
     client.post("/admin/login", data={"password": "correct-horse"})
     client.post("/admin/monitoring/toggle", data={"target": "https://example.test"})
 
-    monkeypatch.setattr(app_module, "run_monitoring_check", lambda: [
-        {"target": "https://example.test", "status": "checked", "new_findings": 2, "resolved_findings": 0},
-    ])
+    calls = []
+    monkeypatch.setattr(app_module, "run_monitoring_check", lambda **kwargs: (
+        calls.append(kwargs) or
+        [{"target": "https://example.test", "status": "checked", "new_findings": 2, "resolved_findings": 0}]
+    ))
 
     resp = client.post("/admin/monitoring/run-now", follow_redirects=True)
     assert b"Checked 1 target" in resp.data
     assert b"1 with new findings" in resp.data
+    assert calls == [{"force": True}]  # "Run check now" bypasses each target's own schedule
 
 
 def test_internal_run_monitoring_disabled_when_token_unset(client, monkeypatch):
@@ -605,6 +608,64 @@ def test_internal_run_monitoring_has_no_csrf_requirement(client, monkeypatch):
         assert resp.status_code == 200
     finally:
         app_module.app.config["WTF_CSRF_ENABLED"] = False
+
+
+# --- Per-target monitoring interval + direct client alert -------------------
+
+def test_update_monitoring_config_requires_admin_login(client):
+    resp = client.post("/admin/monitoring/some-id/config", data={"interval": "weekly"})
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_update_monitoring_config_saves_interval_and_email(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    client.post("/admin/monitoring/toggle", data={"target": "https://example.test"})
+
+    import storage
+    target_id = storage.list_monitored_targets()[0]["id"]
+
+    resp = client.post(f"/admin/monitoring/{target_id}/config", data={
+        "interval": "monthly", "client_email": "client@business.test",
+    }, follow_redirects=True)
+
+    assert resp.status_code == 200
+    assert b"Monitoring settings saved" in resp.data
+    config = storage.list_monitored_target_configs()[target_id]
+    assert config["interval"] == "monthly"
+    assert config["client_email"] == "client@business.test"
+
+
+def test_update_monitoring_config_rejects_unknown_interval(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    client.post("/admin/monitoring/toggle", data={"target": "https://example.test"})
+
+    import storage
+    target_id = storage.list_monitored_targets()[0]["id"]
+
+    resp = client.post(f"/admin/monitoring/{target_id}/config", data={
+        "interval": "daily", "client_email": "client@business.test",
+    }, follow_redirects=True)
+
+    assert b"Unknown re-scan interval" in resp.data
+    assert storage.list_monitored_target_configs() == {}
+
+
+def test_admin_dashboard_renders_monitoring_config_fields(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    client.post("/admin/monitoring/toggle", data={"target": "https://example.test"})
+
+    import storage
+    target_id = storage.list_monitored_targets()[0]["id"]
+    storage.set_monitored_target_config(target_id, "monthly", "client@business.test")
+
+    resp = client.get("/admin")
+    assert resp.status_code == 200
+    assert b"client@business.test" in resp.data
+    assert b"Monthly" in resp.data
 
 
 # --- Automatic 48h lead follow-up --------------------------------------------

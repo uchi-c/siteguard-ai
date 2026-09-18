@@ -42,13 +42,14 @@ from storage import (
     save_lead, list_leads, get_lead, update_lead, import_leads_csv_once, LEAD_STATUSES,
     add_monitored_target, list_monitored_targets, remove_monitored_target, is_monitored,
     log_scan_request, list_scan_requests, list_lead_followups,
+    set_monitored_target_config, list_monitored_target_configs,
 )
 from abuse_guard import (
     is_honeypot_triggered, is_domain_in_cooldown, HONEYPOT_FIELD_NAME,
     DOMAIN_COOLDOWN_MAX_REQUESTS, DOMAIN_COOLDOWN_WINDOW_MINUTES,
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
-from monitoring import run_monitoring_check
+from monitoring import run_monitoring_check, MONITOR_INTERVALS, DEFAULT_INTERVAL
 from followups import (
     run_followup_check, FOLLOWUP_DELAY_HOURS,
     ELIGIBLE_STATUSES as ELIGIBLE_FOLLOWUP_STATUSES,
@@ -72,13 +73,14 @@ ACTIVE_TESTING_ENABLED = os.environ.get("ACTIVE_TESTING_ENABLED") == "1"
 # than accepting an empty token.
 INTERNAL_JOB_TOKEN = os.environ.get("INTERNAL_JOB_TOKEN", "")
 
-# How often the in-process background thread checks for leads due their
-# one-time automatic 48h follow-up (followups.py). Runs only while this
-# process is alive -- on Render's free tier the web service sleeps after
-# 15 minutes idle, so an overdue lead is caught on the next tick after
-# something wakes it back up, not necessarily at exactly 48h. Good enough
-# for "a nudge a couple days later," not a hard SLA.
-FOLLOWUP_CHECK_INTERVAL_SECONDS = 30 * 60
+# How often the in-process background thread ticks -- checking both for
+# leads due their one-time automatic 48h follow-up (followups.py) and for
+# monitored targets due their next weekly/monthly re-scan (monitoring.py).
+# Runs only while this process is alive -- on Render's free tier the web
+# service sleeps after 15 minutes idle, so anything overdue is caught on
+# the next tick after something wakes it back up, not necessarily right
+# on schedule. Good enough for "a nudge/re-scan a bit later," not a hard SLA.
+SCHEDULER_TICK_SECONDS = 30 * 60
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-change-in-production")
@@ -337,6 +339,9 @@ def admin_dashboard():
         active_testing_enabled=ACTIVE_TESTING_ENABLED,
         monitored_targets=monitored,
         monitored_target_set={m["target"] for m in monitored},
+        monitored_target_configs=list_monitored_target_configs(),
+        monitor_intervals=MONITOR_INTERVALS,
+        default_interval=DEFAULT_INTERVAL,
         monitoring_configured=bool(INTERNAL_JOB_TOKEN),
         followups_sent={f["lead_id"]: f for f in list_lead_followups()},
         followup_eligible_statuses=ELIGIBLE_FOLLOWUP_STATUSES,
@@ -417,13 +422,26 @@ def toggle_monitoring():
 @app.route("/admin/monitoring/run-now", methods=["POST"])
 @admin_required
 def run_monitoring_now():
-    results = run_monitoring_check()
+    results = run_monitoring_check(force=True)
     changed = sum(1 for r in results if r.get("status") == "checked" and r.get("new_findings"))
     errored = sum(1 for r in results if r.get("status") == "error")
     if not results:
         flash("No monitored targets to check yet.")
     else:
         flash(f"Checked {len(results)} target(s): {changed} with new findings, {errored} failed.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/monitoring/<target_id>/config", methods=["POST"])
+@admin_required
+def update_monitoring_config(target_id):
+    interval = (request.form.get("interval") or "").strip().lower()
+    client_email = (request.form.get("client_email") or "").strip()
+    if interval not in MONITOR_INTERVALS:
+        flash("Unknown re-scan interval.")
+        return redirect(url_for("admin_dashboard"))
+    set_monitored_target_config(target_id, interval, client_email)
+    flash("Monitoring settings saved.")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -629,11 +647,19 @@ def lead():
     return redirect(url_for("index"))
 
 
-def _followup_scheduler_loop() -> None:
+def _background_scheduler_loop() -> None:
+    """One shared tick for both scheduled jobs -- each one's own due-ness
+    check (followups.py's 48h window, monitoring.py's per-target
+    weekly/monthly interval) decides whether anything actually happens on
+    a given tick, so ticking more often than either cadence is harmless."""
     while True:
-        time.sleep(FOLLOWUP_CHECK_INTERVAL_SECONDS)
+        time.sleep(SCHEDULER_TICK_SECONDS)
         try:
             run_followup_check()
+        except Exception:
+            pass
+        try:
+            run_monitoring_check()
         except Exception:
             pass
 
@@ -644,10 +670,10 @@ def _followup_scheduler_loop() -> None:
 # reliable "the app just started" hook available without a separate
 # gunicorn server-hook config. Skipped under pytest so the test suite
 # never has a live thread hitting the real DB/SMTP in the background;
-# every test that needs this behavior calls followups.run_followup_check
-# directly instead.
+# every test that needs this behavior calls run_followup_check /
+# run_monitoring_check directly instead.
 if "pytest" not in sys.modules:
-    threading.Thread(target=_followup_scheduler_loop, daemon=True).start()
+    threading.Thread(target=_background_scheduler_loop, daemon=True).start()
 
 
 if __name__ == "__main__":

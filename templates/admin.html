@@ -222,21 +222,23 @@
     {% endif %}
   </div>
   <p class="muted" style="font-size:13px; margin:10px 0 0;">
-    A monitored target gets automatically re-scanned on a schedule (once
-    the operator sets up the cron job -- see README) or on demand with
-    "Run check now." Findings are diffed against the last check; nothing
-    here emails or notifies the client automatically -- review any changes
-    here and reach out yourself.
+    Each monitored target picks its own re-scan cadence below (weekly or
+    monthly) and gets automatically re-checked once that's elapsed -- no
+    cron job to set up, a background check runs every 30 minutes while
+    the app is awake. "Run check now" bypasses the schedule for everyone.
+    Set a client email on a target to alert them directly when something
+    changes; leave it blank to just review changes here yourself.
   </p>
   {% if monitored_targets %}
   <div style="height:14px;"></div>
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>Target</th><th>Added</th><th>Last checked</th><th>Changes</th><th>Digest</th><th></th></tr>
+        <tr><th>Target</th><th>Added</th><th>Last checked</th><th>Changes</th><th>Digest</th><th>Interval &amp; client alert email</th><th></th></tr>
       </thead>
       <tbody>
         {% for m in monitored_targets %}
+        {% set config = monitored_target_configs.get(m.id) %}
         <tr>
           <td style="word-break:break-all;">
             {% if m.last_scan_id %}
@@ -255,6 +257,24 @@
           </td>
           <td class="muted" style="font-size:12.5px; max-width:260px;">{{ m.last_digest or '' }}</td>
           <td>
+            <form method="post" action="{{ url_for('update_monitoring_config', target_id=m.id) }}"
+              style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <select name="interval"
+                style="width:auto; padding:5px 8px; border-radius:8px; border:1px solid var(--border);
+                background:var(--bg); color:var(--text); font-size:12.5px;">
+                {% for i in monitor_intervals %}
+                <option value="{{ i }}" {% if i == (config.interval if config else default_interval) %}selected{% endif %}>{{ i|capitalize }}</option>
+                {% endfor %}
+              </select>
+              <input type="email" name="client_email" value="{{ config.client_email if config else '' }}"
+                placeholder="Client email (optional)"
+                style="width:170px; padding:5px 8px; font-size:12.5px; border-radius:8px;
+                border:1px solid var(--border); background:var(--bg); color:var(--text);">
+              <button type="submit" class="btn-secondary btn-sm">Save</button>
+            </form>
+          </td>
+          <td>
             <form method="post" action="{{ url_for('toggle_monitoring') }}" style="width:auto;">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="target" value="{{ m.target }}">
@@ -266,6 +286,11 @@
       </tbody>
     </table>
   </div>
+  {% if not smtp_configured %}
+  <p class="muted" style="font-size:13px; margin-top:10px;">
+    Client alert emails are <strong>off right now</strong> -- set <code>SMTP_USERNAME</code>/<code>SMTP_PASSWORD</code> to enable them.
+  </p>
+  {% endif %}
   {% else %}
   <p class="muted" style="margin-top:10px;">No monitored targets yet -- click "Monitor" next to a scan above.</p>
   {% endif %}
