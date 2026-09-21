@@ -373,3 +373,29 @@ def test_remove_monitored_target_cascades_config(tmp_path, monkeypatch):
     storage.remove_monitored_target(target_id)
 
     assert storage.list_monitored_target_configs() == {}
+
+
+# --- js_files_checked persistence ---------------------------------------------
+
+def test_js_files_checked_survives_save_and_load(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    result = ScanResult(target="https://x.test", scanned_at="t", findings=[], reachable=True, error=None,
+                        js_files_checked=3)
+    loaded, _, _ = storage.load_scan(storage.save_scan(result, "n", "rule-based"))
+    assert loaded.js_files_checked == 3
+
+
+def test_scans_saved_before_js_files_checked_existed_load_as_none(tmp_path, monkeypatch):
+    import json
+    from contextlib import closing
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    old_payload = json.dumps({"target": "https://old.test", "scanned_at": "t", "findings": [],
+                              "reachable": True, "error": None})
+    with closing(storage._connect()) as conn:
+        conn.execute(
+            "INSERT INTO scans (id, created_at, target, data, narrative, narrative_source) "
+            "VALUES ('old-scan', 't', 'https://old.test', ?, 'n', 'rule-based')", (old_payload,),
+        )
+        conn.commit()
+    loaded, _, _ = storage.load_scan("old-scan")
+    assert loaded.js_files_checked is None

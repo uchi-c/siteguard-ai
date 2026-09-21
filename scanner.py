@@ -152,6 +152,11 @@ class ScanResult:
     findings: list = field(default_factory=list)
     reachable: bool = True
     error: str | None = None
+    # How many of the page's JS files the leaked-secrets check actually read
+    # (None = the check didn't run, e.g. a report saved before it existed).
+    # Shown on the report so a clean result is distinguishable from "never
+    # looked" -- findings alone can't say that.
+    js_files_checked: int | None = None
 
     def add(self, id, title, severity, detail, recommendation):
         category = _owasp_for_finding_id(id)
@@ -420,6 +425,7 @@ def _check_leaked_secrets(base_url: str, html: str, result: ScanResult):
         extracted = extract_credentials(base_url, html)
     except Exception:
         return  # an unexpected parse/fetch problem here must never fail the whole scan
+    result.js_files_checked = extracted.bundles_checked
     for finding_args in secret_findings(extracted):
         result.add(*finding_args)
 

@@ -172,3 +172,19 @@ def test_run_scan_detects_cloudflare(cloudflare_target_url, allow_private):
 def test_run_scan_no_waf_finding_when_absent(test_target_url, allow_private):
     result = scanner.run_scan(test_target_url)
     assert all(f.id != "waf-detected" for f in result.findings)
+
+
+# --- JS files checked (leaked-secrets check visibility) ------------------------
+
+def test_run_scan_records_how_many_js_files_were_checked(leaky_bundle_target_url, allow_private):
+    result = scanner.run_scan(leaky_bundle_target_url)
+    assert result.js_files_checked == 1
+
+
+def test_js_files_checked_stays_none_if_the_check_errors(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(scanner, "extract_credentials", boom)
+    result = ScanResult(target="https://example.test", scanned_at="t")
+    scanner._check_leaked_secrets("https://example.test", "<html></html>", result)
+    assert result.js_files_checked is None

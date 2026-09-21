@@ -148,6 +148,13 @@
   </div>
   {% endif %}
 
+  {% if result.js_files_checked %}
+  <p style="font-size:11px; color:#5b6b80; margin:0 0 16px; text-align:center;">
+    Also checked {{ result.js_files_checked }} JavaScript file{{ '' if result.js_files_checked == 1 else 's' }}
+    for leaked keys, passwords and public source maps. Anything found is listed above.
+  </p>
+  {% endif %}
+
   <div class="cta">
     <div class="cta-label">Next step: full security audit</div>
     <p class="cta-text">{{ brand.audit_cta }}</p>

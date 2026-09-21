@@ -211,6 +211,7 @@ def save_scan(result: ScanResult, narrative: str, narrative_source: str) -> str:
         "findings": [asdict(f) for f in result.findings],
         "reachable": result.reachable,
         "error": result.error,
+        "js_files_checked": result.js_files_checked,
     })
     with closing(_connect()) as conn:
         conn.execute(
@@ -238,6 +239,7 @@ def load_scan(scan_id: str) -> tuple[ScanResult, str, str] | None:
         findings=[Finding(**f) for f in d["findings"]],
         reachable=d["reachable"],
         error=d["error"],
+        js_files_checked=d.get("js_files_checked"),  # absent on scans saved before this existed
     )
     return result, narrative, narrative_source
 

@@ -131,6 +131,7 @@ class SecretMatch:
 class ExtractedCredentials:
     secrets: list = field(default_factory=list)       # list[SecretMatch] -- redacted, safe to show
     sourcemaps: list = field(default_factory=list)      # list[str] of exposed .map URLs
+    bundles_checked: int = 0                            # JS files actually fetched and searched
     supabase_url: str | None = None
     supabase_key: str | None = None                     # UNREDACTED -- for active_scan.py only
     supabase_key_role: str | None = None
@@ -206,6 +207,7 @@ def extract_credentials(base_url: str, html: str) -> ExtractedCredentials:
             text = _fetch_capped(script_url)
             if text is None:
                 continue
+            result.bundles_checked += 1
             haystacks.append((script_url, text))
             map_url = _check_sourcemap_exposed(script_url, text)
             if map_url:
@@ -277,8 +279,8 @@ def secret_findings(extracted: ExtractedCredentials) -> list[tuple]:
             f"Exposed secret: {s.label}",
             s.severity,
             detail,
-            "Remove this from any client-side code and move it to a server-side environment variable "
-            "instead. Rotate the key immediately -- treat it as already compromised.",
+            "Remove the exposed secret from all client-side code and move it to a server-side "
+            "environment variable instead. Rotate it immediately -- treat it as already compromised.",
         ))
     for i, map_url in enumerate(extracted.sourcemaps):
         out.append((

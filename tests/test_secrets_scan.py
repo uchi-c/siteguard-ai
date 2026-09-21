@@ -186,3 +186,20 @@ def test_refuses_to_fetch_a_bundle_on_a_private_address_by_default(leaky_bundle_
     extracted = secrets_scan.extract_credentials(leaky_bundle_target_url, html)
     assert extracted.secrets == []
     assert extracted.sourcemaps == []
+
+
+# --- bundles_checked (shown on every report) ----------------------------------
+
+def test_bundles_checked_counts_the_files_actually_read(leaky_bundle_target_url, allow_private):
+    html = requests.get(leaky_bundle_target_url).text
+    assert secrets_scan.extract_credentials(leaky_bundle_target_url, html).bundles_checked == 1
+
+
+def test_bundles_checked_is_zero_when_the_page_has_no_scripts():
+    assert secrets_scan.extract_credentials("https://example.test", "<html></html>").bundles_checked == 0
+
+
+def test_bundles_checked_is_zero_when_the_bundle_is_refused(leaky_bundle_target_url):
+    # No allow_private: the private-address guard skips the fetch entirely.
+    html = requests.get(leaky_bundle_target_url).text
+    assert secrets_scan.extract_credentials(leaky_bundle_target_url, html).bundles_checked == 0

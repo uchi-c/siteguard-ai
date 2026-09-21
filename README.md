@@ -12,7 +12,8 @@ and secrets or source maps leaked in the site's own JavaScript bundles).
 The AI layer (Claude) turns raw findings into a report a non-technical
 business owner will actually read.
 
-**Leaked secrets in JS bundles** (`secrets_scan.py`) is aimed at AI-built
+**Leaked secrets in JS bundles** (`secrets_scan.py`) applies to any site
+that ships JavaScript, and is especially worth running on AI-built
 ("vibe-coded") apps, where the whole app -- including anything hardcoded
 "for now" -- ships to the browser as plain JavaScript. The scan fetches the
 page's own script bundles (max 6, 2MB each, same hostname only, never a
@@ -26,7 +27,9 @@ first and last four characters, because report links are public. Supabase's
 normal `anon` key and Firebase's web `apiKey` are deliberately not flagged:
 both are meant to be public, and whether the data behind them is safe
 depends on database rules the scanner doesn't (and by design can't) test
-from the outside.
+from the outside. Every report also says how many JavaScript files were
+checked (or that none were found), so a clean result is distinguishable
+from a check that never ran.
 
 Every finding is labeled with the **OWASP Top 10 (2021)** category it maps
 to, linked to OWASP's own page for that category -- SiteGuard's own

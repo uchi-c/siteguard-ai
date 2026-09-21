@@ -78,6 +78,17 @@
   <div style="height:20px;"></div>
   {% endif %}
 
+  {% if result.js_files_checked is not none %}
+  <p class="muted" style="font-size:13px; text-align:center; margin:0 0 20px;">
+    {% if result.js_files_checked %}
+    Also checked {{ result.js_files_checked }} JavaScript file{{ '' if result.js_files_checked == 1 else 's' }}
+    on this page for leaked keys, passwords and public source maps. Anything found is listed above.
+    {% else %}
+    No separate JavaScript files were found on this page to check for leaked keys or passwords.
+    {% endif %}
+  </p>
+  {% endif %}
+
   <div class="card" style="text-align:center;">
     <h3 style="margin-top:0;">Want these fixed?</h3>
     <p class="muted">Leave your email and we'll send a prioritized, no-obligation fix plan.</p>

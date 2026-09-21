@@ -1099,3 +1099,38 @@ def test_classify_start_empty_input_shows_error(client, monkeypatch):
     resp = client.post("/admin/classify", data={"text": ""})
     assert resp.status_code == 200
     assert b"Enter some text to classify." in resp.data
+
+
+# --- "JavaScript files checked" line on the report -------------------------------
+
+def _saved_scan_id(js_files_checked):
+    import storage
+    from scanner import ScanResult
+    result = ScanResult(target="https://example.test", scanned_at="t", findings=[], reachable=True,
+                        error=None, js_files_checked=js_files_checked)
+    return storage.save_scan(result, "summary", "rule-based")
+
+
+def test_report_says_how_many_js_files_were_checked_plural(client):
+    resp = client.get(f"/report/{_saved_scan_id(3)}")
+    assert b"Also checked 3 JavaScript files" in resp.data
+
+
+def test_report_says_how_many_js_files_were_checked_singular(client):
+    resp = client.get(f"/report/{_saved_scan_id(1)}")
+    assert b"Also checked 1 JavaScript file" in resp.data
+    assert b"1 JavaScript files" not in resp.data
+
+
+def test_report_says_when_no_js_files_were_found(client):
+    resp = client.get(f"/report/{_saved_scan_id(0)}")
+    assert b"No separate JavaScript files were found" in resp.data
+
+
+def test_report_omits_the_line_for_scans_that_never_ran_the_check(client):
+    resp = client.get(f"/report/{_saved_scan_id(None)}")
+    assert b"JavaScript file" not in resp.data
+
+
+def test_homepage_mentions_the_javascript_check(client):
+    assert b"leaked keys or passwords in your JavaScript" in client.get("/").data
