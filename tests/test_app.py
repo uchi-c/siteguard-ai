@@ -840,6 +840,84 @@ def test_send_report_email_background_calls_emailer_with_pdf(monkeypatch):
     assert sent["report_url"] == "https://x.test/report/abc123"
 
 
+# --- Branded report output (contact info + paid-audit CTA) -------------------
+
+def _render_print_html_via_pdf_route(client, monkeypatch):
+    """Runs a real /scan then /report/<id>/pdf, capturing the HTML handed to
+    pdf_export.render_pdf -- the exact document both the download and the
+    emailed PDF are rendered from."""
+    import re
+    _stub_successful_scan(monkeypatch)
+    resp = client.post("/scan", data={"target": "https://example.test"})
+    scan_id = re.search(rb'/report/([\w-]+)/pdf', resp.data).group(1).decode()
+
+    captured = {}
+    monkeypatch.setattr(app_module.pdf_export, "render_pdf", lambda html: captured.setdefault("html", html) and b"%PDF")
+    client.get(f"/report/{scan_id}/pdf")
+    return captured["html"]
+
+
+def test_print_report_always_carries_brand_and_audit_cta(client, monkeypatch):
+    for var in ("BRAND_CONTACT_EMAIL", "BRAND_CONTACT_URL", "BRAND_AUDIT_CTA"):
+        monkeypatch.delenv(var, raising=False)
+    html = _render_print_html_via_pdf_route(client, monkeypatch)
+    assert "SiteGuard AI" in html
+    assert "Next step: full security audit" in html
+    assert "human review of each finding" in html
+
+
+def test_print_report_omits_contact_lines_when_unset(client, monkeypatch):
+    for var in ("BRAND_CONTACT_EMAIL", "BRAND_CONTACT_URL"):
+        monkeypatch.delenv(var, raising=False)
+    html = _render_print_html_via_pdf_route(client, monkeypatch)
+    assert "Contact SiteGuard AI" not in html
+    assert "Questions about this report?" not in html
+    assert "mailto:" not in html
+
+
+def test_print_report_shows_contact_info_when_set(client, monkeypatch):
+    monkeypatch.setenv("BRAND_CONTACT_EMAIL", "audits@siteguard.test")
+    monkeypatch.setenv("BRAND_CONTACT_URL", "https://fiverr.example/siteguard")
+    html = _render_print_html_via_pdf_route(client, monkeypatch)
+    assert 'href="mailto:audits@siteguard.test"' in html
+    assert 'href="https://fiverr.example/siteguard"' in html
+    assert "Contact SiteGuard AI" in html
+    assert "Questions about this report?" in html
+
+
+def test_print_report_uses_custom_audit_cta_text(client, monkeypatch):
+    monkeypatch.setenv("BRAND_AUDIT_CTA", "Book a 2-week audit with manual verification.")
+    html = _render_print_html_via_pdf_route(client, monkeypatch)
+    assert "Book a 2-week audit with manual verification." in html
+    assert "human review of each finding" not in html
+
+
+def test_print_report_escapes_contact_values(client, monkeypatch):
+    monkeypatch.setenv("BRAND_CONTACT_EMAIL", '"><script>alert(1)</script>')
+    html = _render_print_html_via_pdf_route(client, monkeypatch)
+    assert "<script>alert(1)</script>" not in html
+
+
+def test_emailed_pdf_html_carries_branding_too(monkeypatch):
+    """The lead-capture email renders the same template on a background
+    thread with only an app context (no request) -- the branding context
+    processor has to work there too."""
+    from scanner import ScanResult
+
+    monkeypatch.setenv("BRAND_CONTACT_EMAIL", "audits@siteguard.test")
+    result = ScanResult(target="https://example.test", scanned_at="t", findings=[], reachable=True, error=None)
+    monkeypatch.setattr(app_module, "load_scan", lambda scan_id: (result, "summary", "rule-based"))
+
+    captured = {}
+    monkeypatch.setattr(app_module.pdf_export, "render_pdf", lambda html: captured.setdefault("html", html) and b"%PDF")
+    monkeypatch.setattr(app_module.emailer, "send_report_email", lambda *a, **k: True)
+
+    app_module._send_report_email_background("lead@test.com", "abc123", "https://x.test/report/abc123")
+
+    assert "audits@siteguard.test" in captured["html"]
+    assert "Next step: full security audit" in captured["html"]
+
+
 def test_send_report_email_background_swallows_errors(monkeypatch):
     """Must never raise -- a bad SMTP config, a slow PDF render, whatever --
     the lead-capture request that spawned this already returned to the

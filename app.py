@@ -49,6 +49,7 @@ from abuse_guard import (
     DOMAIN_COOLDOWN_MAX_REQUESTS, DOMAIN_COOLDOWN_WINDOW_MINUTES,
 )
 from batch import MAX_BATCH_TARGETS, create_job, get_job, run_job
+from branding import get_branding
 from monitoring import run_monitoring_check, MONITOR_INTERVALS, DEFAULT_INTERVAL
 from followups import (
     run_followup_check, FOLLOWUP_DELAY_HOURS,
@@ -103,6 +104,11 @@ limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
 # on first admin-dashboard load, so history from before this feature isn't
 # lost. Nothing writes to it anymore.
 LEADS_FILE = os.path.join(os.path.dirname(__file__), "leads.csv")
+
+
+@app.context_processor
+def inject_branding():
+    return {"brand": get_branding()}
 
 
 def admin_required(view):

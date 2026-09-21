@@ -34,6 +34,17 @@ with headless Chromium (`pdf_export.py`) via a separate print-optimized
 template (`templates/report_print.html`) rather than a screenshot of the
 dark-themed web page.
 
+That PDF (both the download and the copy emailed to a lead) is built to be
+forwarded: every one carries the SiteGuard AI letterhead, a **"Next step:
+full security audit"** call-to-action panel, and your contact details in
+the letterhead, the CTA, and the footer. The contact details are yours to
+set, not baked in — `BRAND_CONTACT_EMAIL` and `BRAND_CONTACT_URL` (e.g.
+your Fiverr/Upwork profile or a booking link), plus optionally
+`BRAND_AUDIT_CTA` to say exactly what your paid audit includes (see
+`.env.example`). Any of the three left unset is simply left off the
+report — never a blank label — and the default CTA wording makes no claims
+about pricing or turnaround.
+
 When someone submits their email on the "send me the fix plan" form, the
 same PDF is **emailed to them automatically** along with the report link
 (`emailer.py`, on a background thread so a slow render/send never blocks
@@ -416,6 +427,11 @@ rule-based fallback path.
   `js_discovery.py`. Used by `/report/<id>/pdf` and by the lead-capture
   email. Both this and `js_discovery.py` need `PLAYWRIGHT_BROWSERS_PATH=0`
   set (see below) or Chromium won't be findable at runtime on Render.
+- `branding.py` — the contact info and paid-audit CTA text shown on every
+  exported report, read from `BRAND_*` env vars at render time. Injected
+  into every template as `brand` (`app.py`'s context processor), so it
+  works for the emailed PDF, which renders on a background thread with no
+  request.
 - `emailer.py` — sends a lead their report by email via SMTP (Gmail by
   default) when they submit the fix-plan form, plus the one-time automatic
   48h follow-up (`send_followup_email`, used by `followups.py`) and the
