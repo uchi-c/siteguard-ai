@@ -25,6 +25,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+from secrets_scan import extract_credentials, secret_findings
+
 try:
     import dns.resolver
     _HAVE_DNS = True
@@ -108,6 +110,10 @@ def _owasp_for_finding_id(finding_id: str) -> str | None:
         return FINDING_OWASP_CATEGORY[finding_id]
     if finding_id.startswith("cookie-"):
         return "A07"
+    if finding_id.startswith("exposed-secret-"):
+        # Checked before the generic exposed- prefix below: a leaked key is
+        # sensitive-data exposure (A02), not just a misconfigured path.
+        return "A02"
     if finding_id.startswith("exposed-"):
         return "A05"
     if finding_id.startswith("outdated-js-"):
@@ -406,6 +412,18 @@ def _check_mixed_content_and_js(base_url: str, html: str, result: ScanResult):
                        note, "Upgrade the flagged library to its latest stable release.")
 
 
+def _check_leaked_secrets(base_url: str, html: str, result: ScanResult):
+    """Fetches the page's own JS bundles (capped, same-host only) and looks
+    for leaked credentials and public source maps -- see secrets_scan.py.
+    Reports only redacted previews; never stores a full secret."""
+    try:
+        extracted = extract_credentials(base_url, html)
+    except Exception:
+        return  # an unexpected parse/fetch problem here must never fail the whole scan
+    for finding_args in secret_findings(extracted):
+        result.add(*finding_args)
+
+
 def run_scan(target: str) -> ScanResult:
     url = _normalize_url(target)
     hostname = urlparse(url).hostname or target
@@ -443,5 +461,7 @@ def run_scan(target: str) -> ScanResult:
     _check_dns_email_security(hostname, result)
     _check_sensitive_paths(url, result)
     _check_mixed_content_and_js(url, resp.text, result)
+    _check_leaked_secrets(url, resp.text, result)
 
     return result
+

@@ -7,9 +7,26 @@ is your opening to sell remediation or ongoing monitoring work.
 
 This is a working product, not a mockup. Every check is real and passive
 (HTTP headers, TLS/certificate state, exposed sensitive files, cookie flags,
-SPF/DMARC email-spoofing protection, mixed content, outdated JS libraries).
+SPF/DMARC email-spoofing protection, mixed content, outdated JS libraries,
+and secrets or source maps leaked in the site's own JavaScript bundles).
 The AI layer (Claude) turns raw findings into a report a non-technical
 business owner will actually read.
+
+**Leaked secrets in JS bundles** (`secrets_scan.py`) is aimed at AI-built
+("vibe-coded") apps, where the whole app -- including anything hardcoded
+"for now" -- ships to the browser as plain JavaScript. The scan fetches the
+page's own script bundles (max 6, 2MB each, same hostname only, never a
+third-party CDN) and flags Stripe live secret keys, AWS access key IDs,
+GitHub/OpenAI/Anthropic tokens, private key blocks, database connection
+strings with embedded passwords, and Supabase `service_role` keys, plus
+publicly readable source maps. It reads only what a browser visiting the
+page would already download; it never uses a found key to query anything.
+A found value is **never stored or shown in full** -- reports show only the
+first and last four characters, because report links are public. Supabase's
+normal `anon` key and Firebase's web `apiKey` are deliberately not flagged:
+both are meant to be public, and whether the data behind them is safe
+depends on database rules the scanner doesn't (and by design can't) test
+from the outside.
 
 Every finding is labeled with the **OWASP Top 10 (2021)** category it maps
 to, linked to OWASP's own page for that category -- SiteGuard's own
@@ -387,6 +404,10 @@ rule-based fallback path.
   against a public site (same category as securityheaders.com or Mozilla
   Observatory). Still, only point it at sites you own or a client has
   explicitly asked you to check.
+- `secrets_scan.py` — the leaked-secret and public-source-map detection
+  described above. A leaf module (it imports nothing from `scanner.py`,
+  which imports it, so a copy of the SSRF guard lives here to avoid a
+  circular import). Redacts every match before it leaves the module.
 - `ai_narrative.py` — sends findings to Claude for the plain-English summary;
   falls back to a fully-functional templated narrative if no API key is set
   or the API call fails, so the product never breaks in front of a prospect.

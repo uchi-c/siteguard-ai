@@ -10,6 +10,7 @@ from werkzeug.serving import make_server
 
 import app as app_module
 import scanner
+import secrets_scan
 import storage
 
 
@@ -200,6 +201,42 @@ def vulnerable_scan_result(vulnerable_target_url):
 
 
 @pytest.fixture(scope="session")
+def leaky_bundle_target_url():
+    """A local app whose JS bundle contains a fake AWS access key and ships
+    a publicly readable source map -- regression target for
+    secrets_scan.py's bundle-fetching path (the inline-HTML-only unit
+    tests in test_secrets_scan.py don't exercise real HTTP fetches).
+    Every value here is a made-up placeholder, not a real credential."""
+    from flask import Flask, Response
+
+    leaky = Flask("leaky_bundle_test_target")
+
+    @leaky.route("/")
+    def home():
+        return '<html><head><script src="/static/app.js"></script></head><body></body></html>'
+
+    @leaky.route("/static/app.js")
+    def bundle():
+        # Assembled at runtime so no key-shaped literal sits in the repo
+        # (see the matching note in test_secrets_scan.py).
+        fake_key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        body = f'const AWS_KEY = "{fake_key}";\n//# sourceMappingURL=app.js.map\n'
+        return Response(body, mimetype="application/javascript")
+
+    @leaky.route("/static/app.js.map")
+    def sourcemap():
+        return Response(
+            '{"version":3,"sources":["src/App.tsx"],"sourcesContent":["// original source"]}',
+            mimetype="application/json",
+        )
+
+    srv = _ServerThread(leaky)
+    srv.start()
+    yield f"http://127.0.0.1:{srv.port}"
+    srv.shutdown()
+
+
+@pytest.fixture(scope="session")
 def wordpress_like_target_url():
     """Regression fixture for a real bug: a page with a real GET search
     form (a classic reflected-XSS target) plus 20 cache-busting `?ver=`
@@ -344,6 +381,7 @@ def js_spa_target_url():
 def allow_private(monkeypatch):
     """Lets the SSRF guard through for tests that deliberately scan 127.0.0.1."""
     monkeypatch.setattr(scanner, "ALLOW_PRIVATE_TARGETS", True)
+    monkeypatch.setattr(secrets_scan, "ALLOW_PRIVATE_TARGETS", True)
 
 
 @pytest.fixture
