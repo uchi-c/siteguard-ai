@@ -234,11 +234,12 @@
   <div class="table-wrap">
     <table class="data-table">
       <thead>
-        <tr><th>Target</th><th>Added</th><th>Last checked</th><th>Changes</th><th>Digest</th><th>Interval &amp; client alert email</th><th></th></tr>
+        <tr><th>Target</th><th>Added</th><th>Last checked</th><th>Changes</th><th>Digest</th><th>Interval &amp; client alert email</th><th>Log monitoring</th><th></th></tr>
       </thead>
       <tbody>
         {% for m in monitored_targets %}
         {% set config = monitored_target_configs.get(m.id) %}
+        {% set log_config = log_ingest_configs.get(m.id) %}
         <tr>
           <td style="word-break:break-all;">
             {% if m.last_scan_id %}
@@ -273,6 +274,16 @@
                 border:1px solid var(--border); background:var(--bg); color:var(--text);">
               <button type="submit" class="btn-secondary btn-sm">Save</button>
             </form>
+          </td>
+          <td style="white-space:nowrap;">
+            {% if log_config and log_config.enabled %}
+            <a href="{{ url_for('view_log_events', target_id=m.id) }}">View events &rarr;</a>
+            {% else %}
+            <form method="post" action="{{ url_for('enable_log_monitoring', target_id=m.id) }}" style="width:auto;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn-secondary btn-sm">Enable</button>
+            </form>
+            {% endif %}
           </td>
           <td>
             <form method="post" action="{{ url_for('toggle_monitoring') }}" style="width:auto;">

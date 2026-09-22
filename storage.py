@@ -13,7 +13,11 @@ reasoning as every other table here), a scan-request log (every /scan and
 limiter -- see abuse_guard.py) for abuse visibility in /admin, and a
 lead-followups log recording which leads have already gotten their
 one-time automatic 48h nudge (see followups.py), so a lead is never
-emailed twice by the scheduler.
+emailed twice by the scheduler, and log-event ingestion for the optional
+"log monitoring" add-on (see log_monitor.py) -- a per-target token and
+enabled flag (log_ingest_targets) plus the events a client's own app
+pushes in (log_events), pruned on a rolling window so this stays bounded
+on SQLite.
 
 SQLite on local disk -- ephemeral on a Render free-tier redeploy; fine for
 a link meant to stay useful for days or weeks, and for a lead list you'd
@@ -98,6 +102,36 @@ def _connect():
         "target_id TEXT PRIMARY KEY, "
         "interval TEXT NOT NULL DEFAULT 'weekly', "
         "client_email TEXT NOT NULL DEFAULT '')"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS log_ingest_targets ("
+        "target_id TEXT PRIMARY KEY, "
+        "token TEXT NOT NULL UNIQUE, "
+        "enabled INTEGER NOT NULL DEFAULT 1, "
+        "created_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS log_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "target_id TEXT NOT NULL, "
+        "event_type TEXT NOT NULL, "
+        "source_ip TEXT NOT NULL DEFAULT '', "
+        "path TEXT NOT NULL DEFAULT '', "
+        "message TEXT NOT NULL DEFAULT '', "
+        "occurred_at TEXT NOT NULL, "
+        "received_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_log_events_target_received "
+        "ON log_events (target_id, received_at)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS log_alert_cooldowns ("
+        "target_id TEXT NOT NULL, "
+        "rule TEXT NOT NULL, "
+        "source_ip TEXT NOT NULL, "
+        "last_alerted_at TEXT NOT NULL, "
+        "PRIMARY KEY (target_id, rule, source_ip))"
     )
     return conn
 
@@ -389,6 +423,8 @@ def remove_monitored_target(target_id: str) -> bool:
     with closing(_connect()) as conn:
         cur = conn.execute("DELETE FROM monitored_targets WHERE id = ?", (target_id,))
         conn.execute("DELETE FROM monitored_target_config WHERE target_id = ?", (target_id,))
+        conn.execute("DELETE FROM log_ingest_targets WHERE target_id = ?", (target_id,))
+        conn.execute("DELETE FROM log_events WHERE target_id = ?", (target_id,))
         conn.commit()
         return cur.rowcount > 0
 
@@ -428,3 +464,164 @@ def record_monitor_check(
              digest, target_id),
         )
         conn.commit()
+
+
+# --- Log ingestion (client-pushed security events -> rule-based alerts) ------
+
+def enable_log_ingest(target_id: str) -> str:
+    """Idempotent: a target that already has ingestion enabled just gets its
+    existing token back rather than a new one, so re-clicking "Enable" in
+    /admin never silently breaks a client's already-configured webhook."""
+    with closing(_connect()) as conn:
+        existing = conn.execute(
+            "SELECT token FROM log_ingest_targets WHERE target_id = ?", (target_id,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE log_ingest_targets SET enabled = 1 WHERE target_id = ?", (target_id,)
+            )
+            conn.commit()
+            return existing[0]
+        token = secrets.token_urlsafe(24)
+        conn.execute(
+            "INSERT INTO log_ingest_targets (target_id, token, enabled, created_at) "
+            "VALUES (?, ?, 1, ?)",
+            (target_id, token, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        return token
+
+
+def regenerate_log_ingest_token(target_id: str) -> str | None:
+    """Invalidates the old token immediately -- for when a client's webhook
+    URL may have leaked. Returns None if this target never had ingestion
+    enabled at all."""
+    with closing(_connect()) as conn:
+        existing = conn.execute(
+            "SELECT target_id FROM log_ingest_targets WHERE target_id = ?", (target_id,)
+        ).fetchone()
+        if not existing:
+            return None
+        token = secrets.token_urlsafe(24)
+        conn.execute(
+            "UPDATE log_ingest_targets SET token = ?, enabled = 1 WHERE target_id = ?",
+            (token, target_id),
+        )
+        conn.commit()
+        return token
+
+
+def disable_log_ingest(target_id: str) -> None:
+    with closing(_connect()) as conn:
+        conn.execute("UPDATE log_ingest_targets SET enabled = 0 WHERE target_id = ?", (target_id,))
+        conn.commit()
+
+
+def get_log_ingest_config(target_id: str) -> dict | None:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT target_id, token, enabled, created_at FROM log_ingest_targets WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"target_id": row[0], "token": row[1], "enabled": bool(row[2]), "created_at": row[3]}
+
+
+def list_log_ingest_configs() -> dict[str, dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT target_id, token, enabled, created_at FROM log_ingest_targets"
+        ).fetchall()
+    return {
+        r[0]: {"target_id": r[0], "token": r[1], "enabled": bool(r[2]), "created_at": r[3]}
+        for r in rows
+    }
+
+
+def get_target_id_for_token(token: str) -> str | None:
+    """Only returns a target for a token that's currently enabled -- a
+    disabled/rotated token must be rejected exactly like an unknown one,
+    not just hidden from the admin UI."""
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT target_id FROM log_ingest_targets WHERE token = ? AND enabled = 1", (token,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def insert_log_event(target_id: str, event_type: str, source_ip: str, path: str, message: str,
+                      occurred_at: str | None) -> None:
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO log_events (target_id, event_type, source_ip, path, message, "
+            "occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (target_id, event_type, source_ip, path, message,
+             occurred_at or datetime.now(timezone.utc).isoformat(),
+             datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+
+
+def count_recent_log_events(target_id: str, event_type: str, source_ip: str, since_minutes: int) -> int:
+    """Windowed on received_at (server clock), not the client-supplied
+    occurred_at -- occurred_at is untrusted input and must never be able to
+    push an event in or out of a detection window."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=since_minutes)).isoformat()
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM log_events "
+            "WHERE target_id = ? AND event_type = ? AND source_ip = ? AND received_at >= ?",
+            (target_id, event_type, source_ip, cutoff),
+        ).fetchone()
+    return row[0]
+
+
+def list_recent_log_events(target_id: str, limit: int = 100) -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT id, event_type, source_ip, path, message, occurred_at, received_at "
+            "FROM log_events WHERE target_id = ? ORDER BY received_at DESC LIMIT ?",
+            (target_id, limit),
+        ).fetchall()
+    return [
+        {"id": r[0], "event_type": r[1], "source_ip": r[2], "path": r[3], "message": r[4],
+         "occurred_at": r[5], "received_at": r[6]}
+        for r in rows
+    ]
+
+
+def try_claim_alert_cooldown(target_id: str, rule: str, source_ip: str, cooldown_minutes: int) -> bool:
+    """Atomically checks whether (target_id, rule, source_ip) is past its
+    cooldown and, if so, claims it (records now as the last-alerted time)
+    in the same call -- log_monitor.py relies on this to send at most one
+    alert per window even if many events cross the threshold at once."""
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=cooldown_minutes)).isoformat()
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT last_alerted_at FROM log_alert_cooldowns "
+            "WHERE target_id = ? AND rule = ? AND source_ip = ?",
+            (target_id, rule, source_ip),
+        ).fetchone()
+        if row and row[0] >= cutoff:
+            return False
+        conn.execute(
+            "INSERT INTO log_alert_cooldowns (target_id, rule, source_ip, last_alerted_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(target_id, rule, source_ip) DO UPDATE SET last_alerted_at = excluded.last_alerted_at",
+            (target_id, rule, source_ip, now.isoformat()),
+        )
+        conn.commit()
+        return True
+
+
+def prune_old_log_events(older_than_days: int = 30) -> int:
+    """Keeps log_events from growing without bound on SQLite -- called on
+    every scheduler tick (see app.py), not just once, so a target that logs
+    heavily can't outrun it between deploys."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+    with closing(_connect()) as conn:
+        cur = conn.execute("DELETE FROM log_events WHERE received_at < ?", (cutoff,))
+        conn.commit()
+        return cur.rowcount

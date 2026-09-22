@@ -668,6 +668,217 @@ def test_admin_dashboard_renders_monitoring_config_fields(client, monkeypatch):
     assert b"Monthly" in resp.data
 
 
+# --- Log monitoring (client-pushed security events) --------------------------
+
+def _monitored_target_id(client):
+    client.post("/admin/monitoring/toggle", data={"target": "https://example.test"})
+    import storage
+    return storage.list_monitored_targets()[0]["id"]
+
+
+def test_enable_log_monitoring_requires_admin_login(client):
+    resp = client.post("/admin/monitoring/some-id/log-ingest/enable")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_enable_log_monitoring_creates_a_token_and_redirects_to_the_event_log(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+
+    resp = client.post(f"/admin/monitoring/{target_id}/log-ingest/enable", follow_redirects=True)
+
+    assert resp.status_code == 200
+    assert b"Ingestion URL" in resp.data
+    import storage
+    assert storage.get_log_ingest_config(target_id)["enabled"] is True
+
+
+def test_disable_log_monitoring_rejects_the_token_afterward(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+    resp = client.post(f"/admin/monitoring/{target_id}/log-ingest/disable", follow_redirects=True)
+
+    assert b"disabled" in resp.data
+    assert storage.get_target_id_for_token(token) is None
+
+
+def test_regenerate_log_monitoring_token_changes_the_url(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+
+    import storage
+    old_token = storage.get_log_ingest_config(target_id)["token"]
+    resp = client.post(f"/admin/monitoring/{target_id}/log-ingest/regenerate", follow_redirects=True)
+
+    assert resp.status_code == 200
+    new_token = storage.get_log_ingest_config(target_id)["token"]
+    assert new_token != old_token
+    assert storage.get_target_id_for_token(old_token) is None
+
+
+def test_regenerate_log_monitoring_token_when_never_enabled_flashes(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+
+    resp = client.post(f"/admin/monitoring/{target_id}/log-ingest/regenerate", follow_redirects=True)
+    assert b"never enabled" in resp.data
+
+
+def test_view_log_events_requires_admin_login(client):
+    resp = client.get("/admin/log-events/some-id")
+    assert resp.status_code == 302
+    assert "/admin/login" in resp.headers["Location"]
+
+
+def test_view_log_events_without_enabling_first_flashes_and_redirects(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+
+    resp = client.get(f"/admin/log-events/{target_id}", follow_redirects=True)
+    assert b"hasn&#39;t been enabled" in resp.data or b"hasn't been enabled" in resp.data
+
+
+def test_view_log_events_shows_the_ingestion_url_and_recent_events(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+    storage.insert_log_event(target_id, "http_404", "1.2.3.4", "/wp-admin", "not found", None)
+
+    resp = client.get(f"/admin/log-events/{target_id}")
+    assert resp.status_code == 200
+    assert token.encode() in resp.data
+    assert b"http_404" in resp.data
+    assert b"/wp-admin" in resp.data
+
+
+def test_admin_dashboard_shows_enable_button_before_enabled(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    _monitored_target_id(client)
+
+    resp = client.get("/admin")
+    assert b"Enable" in resp.data
+
+
+def test_admin_dashboard_links_to_event_log_once_enabled(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+
+    resp = client.get("/admin")
+    assert b"View events" in resp.data
+
+
+# --- POST /ingest/<token> (public, client-pushed security events) -----------
+
+def test_ingest_unknown_token_returns_404(client):
+    resp = client.post("/ingest/no-such-token", json={"events": [{"type": "http_404"}]})
+    assert resp.status_code == 404
+    assert resp.get_json()["accepted"] is False
+
+
+def test_ingest_non_json_body_returns_400(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    resp = client.post(f"/ingest/{token}", data="not json", content_type="text/plain")
+    assert resp.status_code == 400
+
+
+def test_ingest_stores_events_and_reports_the_count(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    resp = client.post(f"/ingest/{token}", json={"events": [
+        {"type": "http_403", "path": "/admin"}, {"type": "http_404", "path": "/wp-login.php"},
+    ]})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["accepted"] is True
+    assert body["stored"] == 2
+    assert len(storage.list_recent_log_events(target_id)) == 2
+
+
+def test_ingest_accepts_a_bare_array_not_just_an_events_key(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    resp = client.post(f"/ingest/{token}", json=[{"type": "http_404"}])
+
+    assert resp.status_code == 200
+    assert resp.get_json()["stored"] == 1
+
+
+def test_ingest_has_no_csrf_requirement(client, monkeypatch):
+    """A client's server-side app has no browser session or CSRF token --
+    this route must work even with CSRF protection globally enabled,
+    exactly like /internal/run-monitoring."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    app_module.app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        resp = client.post(f"/ingest/{token}", json={"events": [{"type": "http_404"}]})
+        assert resp.status_code == 200
+    finally:
+        app_module.app.config["WTF_CSRF_ENABLED"] = False
+
+
+def test_ingest_a_disabled_target_stops_accepting_events(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/disable")
+
+    resp = client.post(f"/ingest/{token}", json={"events": [{"type": "http_404"}]})
+    assert resp.status_code == 404
+
+
+def test_scheduler_prunes_old_log_events(monkeypatch):
+    """The background scheduler tick calls prune_old_log_events() -- verify
+    it's actually wired in, the same way the followup/monitoring calls
+    are checked elsewhere, rather than trusting the source read alone."""
+    import inspect
+    source = inspect.getsource(app_module._background_scheduler_loop)
+    assert "prune_old_log_events" in source
+
+
 # --- Automatic 48h lead follow-up --------------------------------------------
 
 def test_run_followups_now_requires_admin_login(client):

@@ -399,3 +399,211 @@ def test_scans_saved_before_js_files_checked_existed_load_as_none(tmp_path, monk
         conn.commit()
     loaded, _, _ = storage.load_scan("old-scan")
     assert loaded.js_files_checked is None
+
+
+# --- Log ingestion (log_ingest_targets, log_events, alert cooldowns) ---------
+
+def test_enable_log_ingest_creates_a_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+
+    token = storage.enable_log_ingest(target_id)
+
+    assert token
+    config = storage.get_log_ingest_config(target_id)
+    assert config["token"] == token
+    assert config["enabled"] is True
+
+
+def test_enable_log_ingest_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+
+    first = storage.enable_log_ingest(target_id)
+    second = storage.enable_log_ingest(target_id)
+
+    assert first == second
+
+
+def test_enable_log_ingest_re_enables_a_disabled_target_with_the_same_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    token = storage.enable_log_ingest(target_id)
+    storage.disable_log_ingest(target_id)
+
+    reenabled_token = storage.enable_log_ingest(target_id)
+
+    assert reenabled_token == token
+    assert storage.get_log_ingest_config(target_id)["enabled"] is True
+
+
+def test_disable_log_ingest_rejects_the_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    token = storage.enable_log_ingest(target_id)
+
+    storage.disable_log_ingest(target_id)
+
+    assert storage.get_target_id_for_token(token) is None
+
+
+def test_regenerate_log_ingest_token_invalidates_the_old_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    old_token = storage.enable_log_ingest(target_id)
+
+    new_token = storage.regenerate_log_ingest_token(target_id)
+
+    assert new_token != old_token
+    assert storage.get_target_id_for_token(old_token) is None
+    assert storage.get_target_id_for_token(new_token) == target_id
+
+
+def test_regenerate_log_ingest_token_returns_none_when_never_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    assert storage.regenerate_log_ingest_token(target_id) is None
+
+
+def test_get_target_id_for_token_returns_none_for_unknown_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    assert storage.get_target_id_for_token("no-such-token") is None
+
+
+def test_remove_monitored_target_cascades_log_ingest_and_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    storage.enable_log_ingest(target_id)
+    storage.insert_log_event(target_id, "login_failure", "1.2.3.4", "/login", "", None)
+
+    storage.remove_monitored_target(target_id)
+
+    assert storage.list_log_ingest_configs() == {}
+    assert storage.list_recent_log_events(target_id) == []
+
+
+def test_insert_and_list_recent_log_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+
+    storage.insert_log_event(target_id, "http_404", "1.2.3.4", "/wp-admin", "not found", None)
+
+    entries = storage.list_recent_log_events(target_id)
+    assert len(entries) == 1
+    assert entries[0]["event_type"] == "http_404"
+    assert entries[0]["source_ip"] == "1.2.3.4"
+    assert entries[0]["path"] == "/wp-admin"
+    assert entries[0]["occurred_at"]  # defaulted to now since None was passed
+    assert entries[0]["received_at"]
+
+
+def test_list_recent_log_events_orders_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    storage.insert_log_event(target_id, "http_403", "1.1.1.1", "", "first", None)
+    time.sleep(0.01)
+    storage.insert_log_event(target_id, "http_403", "2.2.2.2", "", "second", None)
+
+    entries = storage.list_recent_log_events(target_id)
+    assert [e["source_ip"] for e in entries] == ["2.2.2.2", "1.1.1.1"]
+
+
+def test_list_recent_log_events_scoped_to_its_own_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_a = storage.add_monitored_target("https://a.test")
+    target_b = storage.add_monitored_target("https://b.test")
+    storage.insert_log_event(target_a, "http_403", "1.1.1.1", "", "", None)
+
+    assert len(storage.list_recent_log_events(target_a)) == 1
+    assert storage.list_recent_log_events(target_b) == []
+
+
+def test_count_recent_log_events_only_counts_matching_type_and_ip(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    storage.insert_log_event(target_id, "login_failure", "1.2.3.4", "", "", None)
+    storage.insert_log_event(target_id, "login_failure", "1.2.3.4", "", "", None)
+    storage.insert_log_event(target_id, "login_failure", "9.9.9.9", "", "", None)
+    storage.insert_log_event(target_id, "http_404", "1.2.3.4", "", "", None)
+
+    assert storage.count_recent_log_events(target_id, "login_failure", "1.2.3.4", 60) == 2
+    assert storage.count_recent_log_events(target_id, "login_failure", "9.9.9.9", 60) == 1
+    assert storage.count_recent_log_events(target_id, "http_404", "1.2.3.4", 60) == 1
+
+
+def test_count_recent_log_events_excludes_events_outside_the_window(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from contextlib import closing
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    with closing(storage._connect()) as conn:
+        conn.execute(
+            "INSERT INTO log_events (target_id, event_type, source_ip, path, message, "
+            "occurred_at, received_at) VALUES (?, 'login_failure', '1.2.3.4', '', '', ?, ?)",
+            (target_id, old_time, old_time),
+        )
+        conn.commit()
+
+    assert storage.count_recent_log_events(target_id, "login_failure", "1.2.3.4", 60) == 0
+
+
+def test_prune_old_log_events_removes_only_old_rows(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from contextlib import closing
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id = storage.add_monitored_target("https://example.test")
+    storage.insert_log_event(target_id, "http_404", "1.2.3.4", "", "recent", None)
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    with closing(storage._connect()) as conn:
+        conn.execute(
+            "INSERT INTO log_events (target_id, event_type, source_ip, path, message, "
+            "occurred_at, received_at) VALUES (?, 'http_404', '9.9.9.9', '', 'old', ?, ?)",
+            (target_id, old_time, old_time),
+        )
+        conn.commit()
+
+    removed = storage.prune_old_log_events(older_than_days=30)
+
+    assert removed == 1
+    remaining = storage.list_recent_log_events(target_id)
+    assert len(remaining) == 1
+    assert remaining[0]["message"] == "recent"
+
+
+def test_try_claim_alert_cooldown_first_call_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    assert storage.try_claim_alert_cooldown("target-1", "brute-force", "1.2.3.4", 30) is True
+
+
+def test_try_claim_alert_cooldown_blocks_a_second_call_within_the_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.try_claim_alert_cooldown("target-1", "brute-force", "1.2.3.4", 30)
+    assert storage.try_claim_alert_cooldown("target-1", "brute-force", "1.2.3.4", 30) is False
+
+
+def test_try_claim_alert_cooldown_is_scoped_per_rule_and_ip(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    storage.try_claim_alert_cooldown("target-1", "brute-force", "1.2.3.4", 30)
+
+    assert storage.try_claim_alert_cooldown("target-1", "scanning", "1.2.3.4", 30) is True
+    assert storage.try_claim_alert_cooldown("target-1", "brute-force", "9.9.9.9", 30) is True
+    assert storage.try_claim_alert_cooldown("target-2", "brute-force", "1.2.3.4", 30) is True
+
+
+def test_try_claim_alert_cooldown_allows_again_after_the_window_passes(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from contextlib import closing
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+
+    old_time = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+    with closing(storage._connect()) as conn:
+        conn.execute(
+            "INSERT INTO log_alert_cooldowns (target_id, rule, source_ip, last_alerted_at) "
+            "VALUES ('target-1', 'brute-force', '1.2.3.4', ?)", (old_time,),
+        )
+        conn.commit()
+
+    assert storage.try_claim_alert_cooldown("target-1", "brute-force", "1.2.3.4", 30) is True

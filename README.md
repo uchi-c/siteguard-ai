@@ -200,6 +200,58 @@ follow-up above:
   Until/unless that's worth it to you, the in-process scheduler and the
   manual "Run check now" button already cover the same ground for free.
 
+### Log monitoring — real-time alerts on a client's own security events
+
+A step above the re-scan monitoring above: instead of periodically
+re-checking a target from the outside, a client's **own app** pushes
+security events to SiteGuard as they happen (failed logins, 403s, 404s, a
+critical error it wants flagged), and a small fixed set of rules watches
+for patterns and emails an alert. Nothing here scans, probes, or reads
+anything on its own — every event exists because the client's own code
+chose to send it, the same trust relationship as granting repo access for
+the Advanced audit tier.
+
+To turn it on for a monitored target, click **Enable** in its "Log
+monitoring" column in `/admin` — that generates a per-target ingestion
+URL (`log_ingest_targets` in `scans.db`, a random token, not the admin
+password) shown on `/admin/log-events/<id>` along with a copy-paste curl
+example. The client's app (or its error-tracking middleware) then POSTs
+events there:
+
+```
+POST /ingest/<token>
+{"events": [{"type": "login_failure", "ip": "1.2.3.4"}]}
+```
+
+Accepted `type`s: `login_failure`, `http_403`, `http_404`, `error` (add
+`"severity": "critical"` and a `message` to alert immediately, no
+threshold). Up to 20 events per request; extras are dropped, not queued.
+Events older than 30 days are pruned automatically by the same background
+thread that drives monitoring/follow-ups (`log_monitor.py`,
+`storage.prune_old_log_events`).
+
+**The fixed rule set (v1 — not yet user-configurable):**
+- **Brute-force login**: 5+ `login_failure` events from the same IP within
+  10 minutes.
+- **Scanning/probing**: 20+ `http_404` events from the same IP within 5
+  minutes.
+- **Critical error**: any `error` event with `"severity": "critical"` —
+  fires immediately, no threshold.
+
+A rule alerts **at most once per (target, rule, source IP) every 30
+minutes**, however many events cross the threshold in that window, so a
+sustained attack sends one email, not one per request. The alert goes to
+the same client email already set for re-scan monitoring
+(`monitored_target_config.client_email`), and requires
+`SMTP_USERNAME`/`SMTP_PASSWORD` to be set, same as every other client
+email in this app.
+
+**Deliberately out of scope for v1** — real follow-ups, each sizable
+enough to scope on its own: pulling logs directly from a hosting
+platform's own log stream (Cloudflare, Vercel, Render) instead of relying
+on the client to add a webhook call, and letting a client define their
+own rules instead of the fixed set above.
+
 ### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
 
 Everything above is passive (a normal browser visit generates the same
@@ -421,10 +473,13 @@ rule-based fallback path.
   `leads.csv` rows into it, logs every scan request (see "Abuse
   protection" above) for `/admin/scan-log` and the per-domain cooldown,
   records which leads have already gotten their one-time automatic 48h
-  follow-up (`followups.py`) so one is never sent twice, and keeps each
+  follow-up (`followups.py`) so one is never sent twice, keeps each
   monitored target's re-scan interval and client alert email in its own
   table (`monitoring.py`) rather than as columns on the already-deployed
-  `monitored_targets`.
+  `monitored_targets`, and (for log monitoring, see above) each target's
+  ingestion token, the events a client's app has pushed in, and a
+  per-(target, rule, IP) cooldown so a rule alerts at most once per
+  window (`log_monitor.py`).
 - `batch.py` — runs a `/batch` job (multiple scans + outreach drafts) on a
   background thread so the request doesn't have to stay open for minutes;
   job state is in-memory only, so it resets on restart. Applies the same
@@ -479,6 +534,13 @@ rule-based fallback path.
   background thread in `app.py`, `/admin/monitoring/run-now` (manual,
   bypasses the schedule), or `/internal/run-monitoring` (a scheduled job,
   respects it) -- this module is just the actual work, not the trigger.
+- `log_monitor.py` — the fixed rule set behind "Log monitoring" (see
+  above): validates and stores events a client's app POSTs to
+  `/ingest/<token>`, checks them against the brute-force/scanning/
+  critical-error rules, and emails the target's client alert email when
+  one fires -- at most once per (target, rule, source IP) every 30
+  minutes via `storage.try_claim_alert_cooldown`, so a sustained attack
+  doesn't send one email per request.
 - `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`

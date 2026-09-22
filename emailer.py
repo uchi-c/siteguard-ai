@@ -135,6 +135,31 @@ def send_monitoring_alert_email(
         return False
 
 
+def send_log_alert_email(to_email: str, headline: str, detail: str) -> bool:
+    """Sent directly to a log-monitoring client when one of log_monitor.py's
+    fixed rules fires (brute-force logins, automated 404 scanning, a
+    client-flagged critical error) -- these events only exist because the
+    client's own app chose to push them in, so this is squarely inside
+    the trust relationship that add-on implies. Same never-raises
+    contract as every other send in this module."""
+    if not is_configured():
+        return False
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = f"SiteGuard AI alert: {headline}"
+        msg["From"] = SMTP_FROM
+        msg["To"] = to_email
+        msg.set_content(f"{headline}\n\n{detail}\n\nCheck /admin for the full event log.\n\n-- SiteGuard AI")
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as s:
+            s.starttls()
+            s.login(SMTP_USERNAME, SMTP_PASSWORD)
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
 def send_plain_email(to_email: str, subject: str, body: str) -> bool:
     """A minimal, general-purpose send for operator-facing alerts (e.g. the
     monitoring digest, sent only to the operator's own inbox, never a

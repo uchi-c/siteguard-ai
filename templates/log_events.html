@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Log monitoring{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0;">Log monitoring: {{ target.target if target else target_id }}</h2>
+  <p class="muted" style="font-size:13px;">
+    The client's own app POSTs security events here (login failures, 403s,
+    404s, or a flagged critical error) -- nothing here scans or probes
+    anything. A few fixed rules watch for patterns (repeated failed
+    logins, repeated not-found requests, a critical error) and email the
+    target's client alert email when one fires, at most once per rule per
+    source IP every 30 minutes.
+  </p>
+
+  <div style="height:16px;"></div>
+  <div class="section-label" style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin-bottom:8px;">
+    Ingestion URL {% if not config.enabled %}(disabled){% endif %}
+  </div>
+  <div class="table-wrap" style="margin-bottom:4px;">
+    <textarea readonly rows="2" onclick="this.select()"
+      style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+      background:var(--bg); color:var(--text); font-family:monospace; font-size:12.5px; resize:vertical;"
+    >{{ ingest_url }}</textarea>
+  </div>
+  <p class="muted" style="font-size:12px;">
+    POST a JSON body <code>{"events": [{"type": "login_failure", "ip": "1.2.3.4"}]}</code>
+    (or a bare array). Accepted types: {{ event_types|join(', ') }}. For a "critical" error,
+    include <code>"severity": "critical"</code> and a <code>message</code> -- that alerts
+    immediately, no threshold. Up to {{ max_events_per_request }} events per request;
+    extras beyond that are dropped, not queued.
+  </p>
+
+  <div style="height:10px;"></div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+    <form method="post" action="{{ url_for('regenerate_log_monitoring_token', target_id=target_id) }}" style="width:auto;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-secondary btn-sm">Regenerate URL</button>
+    </form>
+    <form method="post" action="{{ url_for('disable_log_monitoring', target_id=target_id) }}" style="width:auto;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-secondary btn-sm">Disable</button>
+    </form>
+  </div>
+</div>
+
+<div style="height:20px;"></div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Recent events ({{ entries|length }})</h3>
+  {% if entries %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr><th>Received (UTC)</th><th>Type</th><th>Source IP</th><th>Path</th><th>Message</th></tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td class="muted" style="white-space:nowrap;">{{ e.received_at[:19].replace('T', ' ') }}</td>
+          <td style="white-space:nowrap; {% if e.event_type == 'login_failure' %}color:var(--critical);{% elif e.event_type == 'error' %}color:var(--high);{% endif %}">
+            {{ e.event_type }}
+          </td>
+          <td class="muted" style="white-space:nowrap;">{{ e.source_ip }}</td>
+          <td class="muted" style="word-break:break-all;">{{ e.path }}</td>
+          <td style="word-break:break-all;">{{ e.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No events received yet.</p>
+  {% endif %}
+</div>
+<p style="text-align:center; margin-top:18px;"><a href="{{ url_for('admin_dashboard') }}">&larr; Back to admin</a></p>
+{% endblock %}

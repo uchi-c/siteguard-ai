@@ -43,6 +43,9 @@ from storage import (
     add_monitored_target, list_monitored_targets, remove_monitored_target, is_monitored,
     log_scan_request, list_scan_requests, list_lead_followups,
     set_monitored_target_config, list_monitored_target_configs,
+    enable_log_ingest, disable_log_ingest, regenerate_log_ingest_token,
+    get_log_ingest_config, list_log_ingest_configs, list_recent_log_events,
+    prune_old_log_events,
 )
 from abuse_guard import (
     is_honeypot_triggered, is_domain_in_cooldown, HONEYPOT_FIELD_NAME,
@@ -54,6 +57,10 @@ from monitoring import run_monitoring_check, MONITOR_INTERVALS, DEFAULT_INTERVAL
 from followups import (
     run_followup_check, FOLLOWUP_DELAY_HOURS,
     ELIGIBLE_STATUSES as ELIGIBLE_FOLLOWUP_STATUSES,
+)
+from log_monitor import (
+    record_events as record_log_events, EVENT_TYPES as LOG_EVENT_TYPES,
+    MAX_EVENTS_PER_REQUEST as LOG_MAX_EVENTS_PER_REQUEST,
 )
 import active_scan_job
 import pdf_export
@@ -349,6 +356,7 @@ def admin_dashboard():
         monitor_intervals=MONITOR_INTERVALS,
         default_interval=DEFAULT_INTERVAL,
         monitoring_configured=bool(INTERNAL_JOB_TOKEN),
+        log_ingest_configs=list_log_ingest_configs(),
         followups_sent={f["lead_id"]: f for f in list_lead_followups()},
         followup_eligible_statuses=ELIGIBLE_FOLLOWUP_STATUSES,
         followup_delay_hours=FOLLOWUP_DELAY_HOURS,
@@ -449,6 +457,70 @@ def update_monitoring_config(target_id):
     set_monitored_target_config(target_id, interval, client_email)
     flash("Monitoring settings saved.")
     return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/monitoring/<target_id>/log-ingest/enable", methods=["POST"])
+@admin_required
+def enable_log_monitoring(target_id):
+    enable_log_ingest(target_id)
+    flash("Log monitoring enabled -- see the ingestion URL below to wire up the client's app.")
+    return redirect(url_for("view_log_events", target_id=target_id))
+
+
+@app.route("/admin/monitoring/<target_id>/log-ingest/disable", methods=["POST"])
+@admin_required
+def disable_log_monitoring(target_id):
+    disable_log_ingest(target_id)
+    flash("Log monitoring disabled -- the old ingestion URL no longer accepts events.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/monitoring/<target_id>/log-ingest/regenerate", methods=["POST"])
+@admin_required
+def regenerate_log_monitoring_token(target_id):
+    token = regenerate_log_ingest_token(target_id)
+    if token is None:
+        flash("Log monitoring was never enabled for this target.")
+        return redirect(url_for("admin_dashboard"))
+    flash("Ingestion URL regenerated -- the old one stopped working immediately.")
+    return redirect(url_for("view_log_events", target_id=target_id))
+
+
+@app.route("/admin/log-events/<target_id>", methods=["GET"])
+@admin_required
+def view_log_events(target_id):
+    config = get_log_ingest_config(target_id)
+    if not config:
+        flash("Log monitoring hasn't been enabled for this target yet.")
+        return redirect(url_for("admin_dashboard"))
+    target = next((m for m in list_monitored_targets() if m["id"] == target_id), None)
+    ingest_url = url_for("ingest_log_events", token=config["token"], _external=True)
+    return render_template(
+        "log_events.html",
+        target=target, target_id=target_id, config=config, ingest_url=ingest_url,
+        event_types=LOG_EVENT_TYPES, max_events_per_request=LOG_MAX_EVENTS_PER_REQUEST,
+        entries=list_recent_log_events(target_id),
+    )
+
+
+@app.route("/ingest/<token>", methods=["POST"])
+@csrf.exempt
+@limiter.limit("30 per minute; 300 per hour")
+def ingest_log_events(token):
+    """A client's own app POSTs security events here -- no browser session,
+    no CSRF token, so this is guarded by the per-target token in the URL
+    instead (same shared-secret-in-the-URL pattern as a webhook from any
+    other SaaS product). Never raises on bad input: an unknown token or a
+    malformed body gets a clear JSON error, not a 500, since a
+    misconfigured client integration must be debuggable from its own logs."""
+    body = request.get_json(silent=True)
+    if body is None:
+        return {"accepted": False, "error": "expected a JSON body"}, 400
+    raw_events = body.get("events", body) if isinstance(body, dict) else body
+    result = record_log_events(token, raw_events, get_remote_address())
+    if not result["accepted"]:
+        return result, 404
+    return result, 200
 
 
 @app.route("/internal/run-monitoring", methods=["POST"])
@@ -666,6 +738,10 @@ def _background_scheduler_loop() -> None:
             pass
         try:
             run_monitoring_check()
+        except Exception:
+            pass
+        try:
+            prune_old_log_events()
         except Exception:
             pass
 
