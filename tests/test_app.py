@@ -870,6 +870,81 @@ def test_ingest_a_disabled_target_stops_accepting_events(client, monkeypatch):
     assert resp.status_code == 404
 
 
+# --- POST /ingest/cloudflare/<token> (public, Cloudflare Logpush) -----------
+
+def test_ingest_cloudflare_unknown_token_returns_404(client):
+    import gzip
+    body = gzip.compress(b'{"EdgeResponseStatus": 404}')
+    resp = client.post("/ingest/cloudflare/no-such-token", data=body, content_type="application/octet-stream")
+    assert resp.status_code == 404
+    assert resp.get_json()["accepted"] is False
+
+
+def test_ingest_cloudflare_validation_payload_returns_200(client, monkeypatch):
+    import gzip
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    body = gzip.compress(b'{"content":"tests"}')
+    resp = client.post(f"/ingest/cloudflare/{token}", data=body, content_type="application/octet-stream")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["validation"] is True
+
+
+def test_ingest_cloudflare_batch_stores_mapped_events(client, monkeypatch):
+    import gzip, json
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    rows = [{"EdgeResponseStatus": 404, "ClientIP": "5.6.7.8", "ClientRequestURI": "/wp-admin"}]
+    body = gzip.compress("\n".join(json.dumps(r) for r in rows).encode())
+
+    resp = client.post(f"/ingest/cloudflare/{token}", data=body, content_type="application/octet-stream")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["stored"] == 1
+    assert storage.list_recent_log_events(target_id)[0]["source_ip"] == "5.6.7.8"
+
+
+def test_ingest_cloudflare_has_no_csrf_requirement(client, monkeypatch):
+    import gzip
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    app_module.app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        body = gzip.compress(b'{"content":"tests"}')
+        resp = client.post(f"/ingest/cloudflare/{token}", data=body, content_type="application/octet-stream")
+        assert resp.status_code == 200
+    finally:
+        app_module.app.config["WTF_CSRF_ENABLED"] = False
+
+
+def test_log_events_page_shows_the_cloudflare_ingestion_url(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    client.post("/admin/login", data={"password": "correct-horse"})
+    target_id = _monitored_target_id(client)
+    client.post(f"/admin/monitoring/{target_id}/log-ingest/enable")
+    import storage
+    token = storage.get_log_ingest_config(target_id)["token"]
+
+    resp = client.get(f"/admin/log-events/{target_id}")
+    assert f"/ingest/cloudflare/{token}".encode() in resp.data
+
+
 def test_scheduler_prunes_old_log_events(monkeypatch):
     """The background scheduler tick calls prune_old_log_events() -- verify
     it's actually wired in, the same way the followup/monitoring calls

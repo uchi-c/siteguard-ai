@@ -59,7 +59,8 @@ from followups import (
     ELIGIBLE_STATUSES as ELIGIBLE_FOLLOWUP_STATUSES,
 )
 from log_monitor import (
-    record_events as record_log_events, EVENT_TYPES as LOG_EVENT_TYPES,
+    record_events as record_log_events, record_cloudflare_batch,
+    EVENT_TYPES as LOG_EVENT_TYPES, CLOUDFLARE_SETUP_FIELDS,
     MAX_EVENTS_PER_REQUEST as LOG_MAX_EVENTS_PER_REQUEST,
 )
 import active_scan_job
@@ -495,9 +496,11 @@ def view_log_events(target_id):
         return redirect(url_for("admin_dashboard"))
     target = next((m for m in list_monitored_targets() if m["id"] == target_id), None)
     ingest_url = url_for("ingest_log_events", token=config["token"], _external=True)
+    cloudflare_ingest_url = url_for("ingest_cloudflare_log_events", token=config["token"], _external=True)
     return render_template(
         "log_events.html",
         target=target, target_id=target_id, config=config, ingest_url=ingest_url,
+        cloudflare_ingest_url=cloudflare_ingest_url, cloudflare_fields=CLOUDFLARE_SETUP_FIELDS,
         event_types=LOG_EVENT_TYPES, max_events_per_request=LOG_MAX_EVENTS_PER_REQUEST,
         entries=list_recent_log_events(target_id),
     )
@@ -518,6 +521,25 @@ def ingest_log_events(token):
         return {"accepted": False, "error": "expected a JSON body"}, 400
     raw_events = body.get("events", body) if isinstance(body, dict) else body
     result = record_log_events(token, raw_events, get_remote_address())
+    if not result["accepted"]:
+        return result, 404
+    return result, 200
+
+
+@app.route("/ingest/cloudflare/<token>", methods=["POST"])
+@csrf.exempt
+@limiter.limit("120 per minute; 3000 per hour")
+def ingest_cloudflare_log_events(token):
+    """Cloudflare Logpush HTTP destination posts batches here -- same
+    token-in-URL auth as /ingest/<token>, but the body is Cloudflare's own
+    shape (gzip-compressed ndjson, or a one-time gzip validation payload
+    made when the job is created), not our JSON schema, so it's parsed
+    separately in log_monitor.record_cloudflare_batch. Rate limit is much
+    higher than the generic webhook: Logpush delivers on its own schedule,
+    as often as roughly every 30 seconds once a job is live, not once per
+    client request. request.get_data() is used instead of get_json()
+    because the body may be gzip binary, not directly-parseable JSON."""
+    result = record_cloudflare_batch(token, request.get_data(), get_remote_address())
     if not result["accepted"]:
         return result, 404
     return result, 200

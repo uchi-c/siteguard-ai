@@ -14,13 +14,24 @@ rule fires at most once per (target, rule, source IP) every
 ALERT_COOLDOWN_MINUTES, however many events cross the threshold in that
 window, so an active attack sends one alert, not one per request.
 
-Explicitly deferred, not built here: ingesting logs directly from a
-hosting platform (Cloudflare/Vercel/Render log push) rather than a
-client-added webhook call, and letting a client define their own rules.
-Both are real follow-ups, each sizable enough to scope on their own.
+Also handles Cloudflare Logpush directly (record_cloudflare_batch): a
+client points a Logpush HTTP destination job at their /ingest/cloudflare/
+URL and every EdgeResponseStatus 404/5xx Cloudflare's edge sees feeds the
+same rules below, no code change on the client's side. Cloudflare's wire
+format (ndjson batches, a one-time gzip validation payload, no ownership
+challenge for HTTP destinations) is unrelated to the generic webhook's
+JSON schema, so it's parsed separately and then handed to record_events
+once mapped into the same event shape -- one rule engine, two ingestion
+paths.
+
+Still deferred, not built here: Vercel/Render log push, and letting a
+client define their own rules. Both are real follow-ups, each sizable
+enough to scope on their own.
 """
 from __future__ import annotations
 
+import gzip
+import json
 from datetime import datetime
 
 from emailer import send_log_alert_email
@@ -153,3 +164,94 @@ def record_events(token: str, raw_events, fallback_ip: str) -> dict:
 
     return {"accepted": True, "stored": stored, "skipped": skipped, "truncated": truncated,
             "alerts": alerts}
+
+
+# --- Cloudflare Logpush -----------------------------------------------------
+#
+# Cloudflare posts two very different bodies to an HTTP destination, both
+# possibly gzip-compressed on the wire: a one-time validation upload made
+# when the job is created (must succeed or job creation is refused), and
+# real batches of newline-delimited JSON, one line per HTTP request. We
+# ask clients to configure the job with exactly the fields below (see
+# CLOUDFLARE_SETUP_FIELDS / the setup instructions in log_events.html) so
+# mapping stays a fixed, known shape rather than a general parser.
+
+CLOUDFLARE_VALIDATION_PAYLOAD = '{"content":"tests"}'
+CLOUDFLARE_SETUP_FIELDS = (
+    "ClientIP", "ClientRequestMethod", "ClientRequestURI", "EdgeResponseStatus",
+    "EdgeStartTimestamp",
+)
+# Cloudflare's own max_upload_records floor is 1,000; we ask clients to set
+# their job to that, and cap defensively at the same number regardless of
+# what a job is actually configured to send.
+CLOUDFLARE_MAX_RECORDS_PER_BATCH = 1000
+
+
+def _cloudflare_decompress(raw_body: bytes) -> bytes:
+    if not isinstance(raw_body, (bytes, bytearray)):
+        return b""
+    if bytes(raw_body[:2]) == b"\x1f\x8b":
+        try:
+            return gzip.decompress(raw_body)
+        except OSError:
+            return bytes(raw_body)  # not actually valid gzip -- fall through as-is
+    return bytes(raw_body)
+
+
+def _map_cloudflare_record(row: dict) -> dict | None:
+    """Translates one http_requests dataset record into our internal event
+    shape. Only 404s and 5xx responses map to anything -- everything else
+    (the vast majority of any site's traffic) isn't signal any of our
+    fixed rules act on, so it's dropped here rather than stored."""
+    if not isinstance(row, dict):
+        return None
+    status = row.get("EdgeResponseStatus")
+    occurred_at = row.get("EdgeStartTimestamp")
+    if not isinstance(occurred_at, str):
+        occurred_at = None  # only rfc3339 strings parse; numeric formats are dropped, not guessed at
+
+    if status == 404:
+        return {"type": "http_404", "ip": row.get("ClientIP"), "path": row.get("ClientRequestURI"),
+                "occurred_at": occurred_at}
+    if isinstance(status, int) and status >= 500:
+        method = row.get("ClientRequestMethod") or ""
+        path = row.get("ClientRequestURI") or ""
+        return {
+            "type": "error", "severity": "critical", "ip": row.get("ClientIP"), "path": path,
+            "occurred_at": occurred_at, "message": f"{status} from origin on {method} {path}".strip(),
+        }
+    return None
+
+
+def record_cloudflare_batch(token: str, raw_body: bytes, fallback_ip: str) -> dict:
+    """Entry point for POST /ingest/cloudflare/<token>. Never raises: a
+    malformed or unexpected body must not turn into a 500, since Cloudflare
+    marks a Logpush job unhealthy (and eventually disables it) after
+    repeated destination failures -- exactly what we must never cause for
+    a body shape we simply didn't anticipate."""
+    if not get_target_id_for_token(token):
+        return {"accepted": False, "error": "unknown or disabled token"}
+
+    text = _cloudflare_decompress(raw_body).decode("utf-8", errors="replace").strip()
+    if text == CLOUDFLARE_VALIDATION_PAYLOAD:
+        # The one-time destination-ownership upload Cloudflare makes before
+        # allowing the job to go live -- acknowledge it, nothing to store.
+        return {"accepted": True, "validation": True, "stored": 0, "skipped": 0, "alerts": []}
+
+    mapped, malformed = [], 0
+    for line in text.splitlines()[:CLOUDFLARE_MAX_RECORDS_PER_BATCH]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            malformed += 1
+            continue
+        event = _map_cloudflare_record(row)
+        if event is not None:
+            mapped.append(event)
+
+    result = record_events(token, mapped, fallback_ip)
+    result["skipped"] = result.get("skipped", 0) + malformed
+    return result

@@ -246,11 +246,28 @@ the same client email already set for re-scan monitoring
 `SMTP_USERNAME`/`SMTP_PASSWORD` to be set, same as every other client
 email in this app.
 
+**Cloudflare Logpush — no code change on the client's site.** If the
+target sits behind Cloudflare, a Logpush job can feed the same rules
+directly from the edge instead of the webhook above. The setup card on
+`/admin/log-events/<id>` shows the exact URL and dashboard steps; in
+short: **Logpush → Create a Logpush job → dataset `HTTP requests` →
+destination HTTP → paste `POST /ingest/cloudflare/<token>` as the
+endpoint → send only `ClientIP`, `ClientRequestMethod`,
+`ClientRequestURI`, `EdgeResponseStatus`, `EdgeStartTimestamp` →
+timestamp format RFC3339**. Cloudflare validates the destination itself
+(a one-time gzip-compressed test upload — no ownership-challenge file
+needed) before the job goes live. Only two things are forwarded into the
+same rule engine: 404s (feeds the scanning rule) and 5xx origin/edge
+errors (feeds the critical-error rule) — Cloudflare's edge logs can't
+reliably tell a failed login from any other request without knowing the
+app's own conventions, so brute-force detection stays webhook-only for
+now. Both ingestion paths share one token per target and one event
+store, so `/admin/log-events/<id>` shows events from either source
+side by side.
+
 **Deliberately out of scope for v1** — real follow-ups, each sizable
-enough to scope on its own: pulling logs directly from a hosting
-platform's own log stream (Cloudflare, Vercel, Render) instead of relying
-on the client to add a webhook call, and letting a client define their
-own rules instead of the fixed set above.
+enough to scope on its own: Vercel/Render log push, and letting a client
+define their own rules instead of the fixed set above.
 
 ### Active vulnerability testing (`/admin/active-scan`) — off by default, read this first
 
@@ -540,7 +557,12 @@ rule-based fallback path.
   critical-error rules, and emails the target's client alert email when
   one fires -- at most once per (target, rule, source IP) every 30
   minutes via `storage.try_claim_alert_cooldown`, so a sustained attack
-  doesn't send one email per request.
+  doesn't send one email per request. Also parses Cloudflare Logpush
+  batches straight off `/ingest/cloudflare/<token>`
+  (`record_cloudflare_batch` -- gzip/ndjson, the one-time validation
+  payload, mapping 404/5xx rows into the same event shape) and feeds them
+  into the identical rule set, so there's one rule engine behind both
+  ingestion paths.
 - `payload_classifier.py` — loads `ml/models/payload_classifier.joblib` and
   classifies pasted text for `/admin/classify`. Local inference only.
 - `ml/train.py` — trains that model from `ml/data/clean_payloads.csv`

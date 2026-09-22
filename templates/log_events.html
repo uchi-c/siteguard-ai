@@ -46,6 +46,35 @@
 <div style="height:20px;"></div>
 
 <div class="card">
+  <h3 style="margin-top:0;">Site sits behind Cloudflare? Skip the webhook</h3>
+  <p class="muted" style="font-size:13px;">
+    If the target is proxied through Cloudflare, a Logpush job can feed
+    this directly from the edge -- no code change on the client's site.
+    It only ever forwards two things: 404s (feeds the scanning rule) and
+    5xx origin/edge errors (feeds the critical-error rule). Regenerating
+    the URL above also changes this one, since they share the same token.
+  </p>
+  <div class="table-wrap" style="margin:8px 0 4px;">
+    <textarea readonly rows="2" onclick="this.select()"
+      style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+      background:var(--bg); color:var(--text); font-family:monospace; font-size:12.5px; resize:vertical;"
+    >{{ cloudflare_ingest_url }}</textarea>
+  </div>
+  <p class="muted" style="font-size:12px;">
+    In the Cloudflare dashboard: <strong>Logpush</strong> (zone level) &rarr;
+    <strong>Create a Logpush job</strong> &rarr; dataset <strong>HTTP requests</strong>
+    &rarr; destination <strong>HTTP</strong>, paste the URL above as the
+    endpoint &rarr; under <strong>Send the following fields</strong>, select
+    only: {{ cloudflare_fields|join(', ') }} &rarr; set the timestamp format
+    to <strong>RFC3339</strong> &rarr; Submit. Cloudflare validates the
+    destination automatically (no ownership file needed) and starts
+    delivering shortly after.
+  </p>
+</div>
+
+<div style="height:20px;"></div>
+
+<div class="card">
   <h3 style="margin-top:0;">Recent events ({{ entries|length }})</h3>
   {% if entries %}
   <div class="table-wrap">

@@ -1,7 +1,14 @@
+import gzip
+import json
 from unittest.mock import MagicMock
 
 import log_monitor
 import storage
+
+
+def _cf_ndjson(rows: list[dict], compress: bool = True) -> bytes:
+    body = "\n".join(json.dumps(r) for r in rows).encode("utf-8")
+    return gzip.compress(body) if compress else body
 
 
 def _target_with_ingest(client_email=""):
@@ -236,3 +243,98 @@ def test_alert_email_failure_never_raises_out_of_record_events(tmp_path, monkeyp
     result = log_monitor.record_events(token, events, "1.2.3.4")  # must not raise
 
     assert "brute-force" in result["alerts"]
+
+
+# --- record_cloudflare_batch -------------------------------------------------
+
+def test_cloudflare_unknown_token_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    result = log_monitor.record_cloudflare_batch("no-such-token", _cf_ndjson([{"EdgeResponseStatus": 404}]), "1.1.1.1")
+    assert result == {"accepted": False, "error": "unknown or disabled token"}
+
+
+def test_cloudflare_gzip_validation_payload_is_acknowledged_without_storing(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id, token = _target_with_ingest()
+    body = gzip.compress(log_monitor.CLOUDFLARE_VALIDATION_PAYLOAD.encode("utf-8"))
+
+    result = log_monitor.record_cloudflare_batch(token, body, "10.0.0.1")
+
+    assert result == {"accepted": True, "validation": True, "stored": 0, "skipped": 0, "alerts": []}
+    assert storage.list_recent_log_events(target_id) == []
+
+
+def test_cloudflare_404_rows_feed_the_scanning_rule(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id, token = _target_with_ingest("client@business.test")
+    sent = MagicMock(return_value=True)
+    monkeypatch.setattr(log_monitor, "send_log_alert_email", sent)
+    rows = [{"EdgeResponseStatus": 404, "ClientIP": "5.6.7.8", "ClientRequestURI": "/wp-admin"}] * log_monitor.SCAN_THRESHOLD
+
+    result = log_monitor.record_cloudflare_batch(token, _cf_ndjson(rows), "10.0.0.1")
+
+    assert "scanning" in result["alerts"]
+    stored = storage.list_recent_log_events(target_id)
+    assert all(e["event_type"] == "http_404" for e in stored)
+
+
+def test_cloudflare_5xx_rows_feed_the_critical_error_rule(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id, token = _target_with_ingest("client@business.test")
+    sent = MagicMock(return_value=True)
+    monkeypatch.setattr(log_monitor, "send_log_alert_email", sent)
+    rows = [{
+        "EdgeResponseStatus": 502, "ClientIP": "5.6.7.8",
+        "ClientRequestURI": "/checkout", "ClientRequestMethod": "POST",
+    }]
+
+    result = log_monitor.record_cloudflare_batch(token, _cf_ndjson(rows), "10.0.0.1")
+
+    assert "critical-error" in result["alerts"]
+    sent.assert_called_once()
+    assert "502" in sent.call_args[0][2]
+
+
+def test_cloudflare_2xx_rows_are_not_stored(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id, token = _target_with_ingest()
+    rows = [{"EdgeResponseStatus": 200, "ClientIP": "5.6.7.8", "ClientRequestURI": "/"}] * 5
+
+    result = log_monitor.record_cloudflare_batch(token, _cf_ndjson(rows), "10.0.0.1")
+
+    assert result["stored"] == 0
+    assert storage.list_recent_log_events(target_id) == []
+
+
+def test_cloudflare_uses_the_client_ip_field_not_the_posting_source_ip(tmp_path, monkeypatch):
+    # The POST to /ingest/cloudflare/<token> comes from Cloudflare's own
+    # infrastructure, not the attacker -- fallback_ip must never leak in
+    # when the row already carries a real ClientIP.
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id, token = _target_with_ingest()
+    rows = [{"EdgeResponseStatus": 404, "ClientIP": "9.9.9.9", "ClientRequestURI": "/x"}]
+
+    log_monitor.record_cloudflare_batch(token, _cf_ndjson(rows), "203.0.113.1")
+
+    assert storage.list_recent_log_events(target_id)[0]["source_ip"] == "9.9.9.9"
+
+
+def test_cloudflare_malformed_json_line_is_skipped_not_fatal(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id, token = _target_with_ingest()
+    body = b'not json\n' + json.dumps({"EdgeResponseStatus": 404, "ClientIP": "1.2.3.4"}).encode()
+
+    result = log_monitor.record_cloudflare_batch(token, gzip.compress(body), "10.0.0.1")
+
+    assert result["stored"] == 1
+    assert result["skipped"] == 1
+
+
+def test_cloudflare_batch_works_uncompressed_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DB_PATH", str(tmp_path / "scans.db"))
+    target_id, token = _target_with_ingest()
+    rows = [{"EdgeResponseStatus": 404, "ClientIP": "1.2.3.4", "ClientRequestURI": "/y"}]
+
+    result = log_monitor.record_cloudflare_batch(token, _cf_ndjson(rows, compress=False), "10.0.0.1")
+
+    assert result["stored"] == 1
